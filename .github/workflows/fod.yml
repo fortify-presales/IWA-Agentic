@@ -73,6 +73,7 @@ jobs:
             -exclude "DEMO.md"
             -exclude "SECURITY.md"
             -exclude "README.md"
+            -exclude "**/specs/**/*"
             -exclude "**/tests/**/*"
             -exclude "**/build/**/*"
             -exclude "**/dist/**/*"
