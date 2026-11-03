@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RulePack xmlns="xmlns://www.fortifysoftware.com/schema/rules">
+  <RulePackID>61F642BA-A758-442E-BAA2-7DE6CEFEC883</RulePackID>
+  <SKU>Custom Rules</SKU>
+  <Name>IWA TypeScript Prompt Injection Rules</Name>
+  <Description>Detects function parameters embedded in strings passed to LangChain SystemMessage.</Description>
+  <Rules version="26.4">
+    <RuleDefinitions>
+      <CharacterizationRule formatVersion="26.4" language="javascript">
+        <RuleID>929C6D58-820D-4F1E-B7CB-4250E76B774F</RuleID>
+        <StructuralMatch><![CDATA[
+          Function chat:
+            chat.name == "chat" and
+            chat.enclosingClass.name == "AgentService" and
+            chat.parameters[0] is [Variable promptInput:]
+        ]]></StructuralMatch>
+        <Definition><![CDATA[
+          TaintEntrypoint(promptInput, {+WEB +XSS})
+        ]]></Definition>
+      </CharacterizationRule>
+      <CharacterizationRule formatVersion="26.4" language="javascript">
+        <MetaInfo>
+          <Group name="Accuracy">4</Group>
+          <Group name="Impact">4</Group>
+          <Group name="Probability">3</Group>
+        </MetaInfo>
+        <RuleID>31F04A15-85A9-4689-8E52-FD85FA06A51A</RuleID>
+        <VulnCategory>Prompt Injection</VulnCategory>
+        <VulnSubcategory>Assistant Prompt</VulnSubcategory>
+        <DefaultSeverity>4.0</DefaultSeverity>
+        <Description>
+          <Abstract><![CDATA[HTTP request-body data flows into a LangChain system message.]]></Abstract>
+          <Explanation><![CDATA[An Express Request body is attacker-controlled. When data from that body reaches a LangChain SystemMessage, an HTTP client can inject text into system-level model instructions and influence model behavior or tool selection. This rule marks Express Request body data as web taint and reports when that taint reaches the SystemMessage argument.]]></Explanation>
+          <Recommendations><![CDATA[Do not place request-controlled content in system instructions. Keep user input in a separate user message, and treat retrieved content and tool output as untrusted data.]]></Recommendations>
+          <References>
+            <Reference>
+              <Title><![CDATA[CWE-1427: Improper Neutralization of Input for LLM Prompting]]></Title>
+              <Source>https://cwe.mitre.org/data/definitions/1427.html</Source>
+            </Reference>
+          </References>
+        </Description>
+        <StructuralMatch><![CDATA[
+          FunctionCall message:
+            message.possibleTargets contains [Function systemMessage:
+              systemMessage.name == "SystemMessage"
+            ] and
+            message.arguments[0] is [Expression systemText:]
+        ]]></StructuralMatch>
+        <Definition><![CDATA[
+          TaintSink(systemText, [WEB])
+        ]]></Definition>
+      </CharacterizationRule>
+      <StructuralRule formatVersion="26.4" language="javascript">
+        <MetaInfo>
+          <Group name="Accuracy">4</Group>
+          <Group name="Impact">4</Group>
+          <Group name="Probability">3</Group>
+        </MetaInfo>
+        <RuleID>BF9892A3-64EA-49A1-9C13-4D03573A55E5</RuleID>
+        <VulnCategory>Prompt Injection</VulnCategory>
+        <VulnSubcategory>Assistant Prompt</VulnSubcategory>
+        <DefaultSeverity>4.0</DefaultSeverity>
+        <Description>
+          <Abstract><![CDATA[Function parameters are embedded in strings passed to LangChain SystemMessage.]]></Abstract>
+          <Explanation><![CDATA[A helper function returns a dynamically constructed string containing one of its parameters, and that helper is passed directly as the first argument to LangChain's SystemMessage constructor. If the parameter contains user-controlled or otherwise untrusted text, it can alter system-level LLM instructions, model behavior, and tool selection. The rule does not depend on the helper function name or parameter name. Inline string construction directly inside SystemMessage is outside this rule's current structural pattern.]]></Explanation>
+          <Recommendations><![CDATA[Keep user content in a separate user message, and do not concatenate it into system instructions. Treat retrieved content and tool output as untrusted data.]]></Recommendations>
+          <References>
+            <Reference>
+              <Title><![CDATA[CWE-1427: Improper Neutralization of Input for LLM Prompting]]></Title>
+              <Source>https://cwe.mitre.org/data/definitions/1427.html</Source>
+            </Reference>
+          </References>
+        </Description>
+        <Predicate><![CDATA[
+          FunctionCall message:
+            message.possibleTargets contains [Function systemMessage:
+              systemMessage.name == "SystemMessage"
+            ] and
+            message.arguments[0] is [FunctionCall builderCall:
+              builderCall.possibleTargets contains [Function builder:
+                builder.parameters contains [Variable p:
+                  builder contains [ReturnStatement r:
+                    r.enclosingFunction === builder and
+                    r.expression contains [StringLiteral:] and
+                    r.expression contains [VariableAccess input:
+                      input.variable === p and input.enclosingFunction === builder
+                    ]
+                  ]
+                ]
+              ]
+            ]
+        ]]></Predicate>
+      </StructuralRule>
+    </RuleDefinitions>
+  </Rules>
+</RulePack>
