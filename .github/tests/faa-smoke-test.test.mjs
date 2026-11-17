@@ -30,6 +30,8 @@ async function fixture(t) {
     GITHUB_REPOSITORY: 'fortify-presales/IWA-Agentic', GITHUB_REPOSITORY_ID: '1345239625',
     GITHUB_REF: 'refs/heads/main', GITHUB_SHA: headSha, GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1',
     GITHUB_STEP_SUMMARY: join(temp, 'step-summary'),
+    FAA_LICENSE_PLATFORM: 'fod', FCLI_DEFAULT_FOD_URL: 'https://fod.example.invalid',
+    FCLI_DEFAULT_FOD_CLIENT_ID: 'test-client-id', FCLI_DEFAULT_FOD_CLIENT_SECRET: 'test-client-secret',
   };
   const calls = [];
   const execute = (command, args, options) => {
@@ -83,6 +85,54 @@ test('approved pilot branch scans the exact dispatched head and records its ref'
   assert.equal(f.calls.filter((args) => args[0] === '-scan').length, 1);
   const saved = JSON.parse(await readFile(join(f.outputDir, 'faa-execution.json'), 'utf8'));
   assert.equal(saved.ref, f.env.GITHUB_REF);
+});
+
+for (const platform of ['fod', 'ssc']) {
+  test(`${platform} licensing forwards only the selected backend through the FAA environment`, async (t) => {
+    const f = await fixture(t);
+    f.env.FAA_LICENSE_PLATFORM = platform;
+    f.env.FCLI_DEFAULT_SSC_URL = 'https://ssc.example.invalid/ssc';
+    f.env.FCLI_DEFAULT_SSC_TOKEN = 'test-ssc-token';
+    const selectedKey = platform === 'fod' ? 'FCLI_DEFAULT_FOD_CLIENT_SECRET' : 'FCLI_DEFAULT_SSC_TOKEN';
+    const unusedPrefix = platform === 'fod' ? 'FCLI_DEFAULT_SSC_' : 'FCLI_DEFAULT_FOD_';
+    f.env[`${unusedPrefix}USER`] = 'unused-runner-user';
+    const execute = (command, args, options) => {
+      if (command === 'fortifyaa') {
+        assert.equal(options.env[selectedKey], f.env[selectedKey]);
+        assert.ok(!Object.keys(options.env).some((key) => key.startsWith(unusedPrefix)));
+        assert.ok(!args.some((arg) => arg.includes(f.env[selectedKey])));
+      }
+      return f.execute(command, args, options);
+    };
+    const record = await runSmokeTest({ ...f, execute });
+    assert.equal(record.status, 'succeeded');
+    assert.equal(record.licensePlatform, platform);
+    for (const file of ['faa-execution.json', 'faa-execution-summary.md']) {
+      const output = await readFile(join(f.outputDir, file), 'utf8');
+      assert.ok(!output.includes(f.env.FCLI_DEFAULT_FOD_CLIENT_SECRET));
+      assert.ok(!output.includes(f.env.FCLI_DEFAULT_SSC_TOKEN));
+    }
+  });
+}
+
+test('unsupported platforms or missing selected credentials fail before FAA without disclosing values', async (t) => {
+  const f = await fixture(t);
+  for (const overrides of [
+    { FAA_LICENSE_PLATFORM: undefined },
+    { FAA_LICENSE_PLATFORM: 'auto' },
+    { FCLI_DEFAULT_FOD_URL: '' },
+    { FCLI_DEFAULT_FOD_CLIENT_ID: undefined },
+    { FCLI_DEFAULT_FOD_CLIENT_SECRET: ' ' },
+    { FAA_LICENSE_PLATFORM: 'ssc' },
+    { FAA_LICENSE_PLATFORM: 'ssc', FCLI_DEFAULT_SSC_URL: 'https://ssc.example.invalid/ssc' },
+    { FAA_LICENSE_PLATFORM: 'ssc', FCLI_DEFAULT_SSC_TOKEN: 'test-ssc-token' },
+  ]) {
+    await assert.rejects(runSmokeTest({ ...f, env: { ...f.env, ...overrides } }), /FAA_LICENSE_PLATFORM|Missing FCLI_DEFAULT_/);
+    assert.equal(f.calls.length, 0);
+    const output = await readFile(join(f.outputDir, 'faa-execution.json'), 'utf8');
+    assert.equal(JSON.parse(output).status, 'failed');
+    assert.ok(!output.includes(f.env.FCLI_DEFAULT_FOD_CLIENT_SECRET));
+  }
 });
 
 test('unapproved refs, foreign repositories and invalid ranges fail before any FAA call', async (t) => {

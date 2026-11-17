@@ -51,7 +51,8 @@
 ### Smoke-test validation
 
 - `node --test .github\tests\faa-smoke-test.test.mjs .github\tests\faa-risk-adapter.test.mjs`
-  — passed, 22 tests; FAA calls are fake executors, never live scans.
+  — passed, 25 tests; FAA calls are fake executors, never live scans. Both backends are covered,
+  including inherited opposite-namespace settings, missing configuration, and credential isolation.
 - `node --check .github\scripts\faa-smoke-test.mjs` — passed.
 - `actionlint.exe -config-file .github\actionlint.yaml -shellcheck= -pyflakes= .github\workflows\faa-smoke-test.yml .github\workflows\faa-risk-assessment.yml`
   — passed using checksum-verified actionlint 1.7.7; configuration allowlists the registered custom runner labels.
@@ -65,13 +66,25 @@
   cover the approved feature ref and rejection of other refs/forks in tests.
 - [x] T018 Review and merge a separate one-file, notice-only dispatcher bootstrap PR into `main`
   ([#24](https://github.com/fortify-presales/IWA-Agentic/pull/24)).
-- [ ] T019 Incorporate that bootstrap base, then publish the reviewed pilot feature branch.
+- [x] T019 Incorporate that bootstrap base, then publish the reviewed pilot feature branch
+  (`76b137a124660862b9c91e6dfbc3087653057842`).
 - [ ] T020 Dispatch the feature workflow with a reviewed source-change base and inspect real
   execution records, SARIF, and Markdown before merging the complete pilot.
+- [x] T021 Add selectable FoD/SSC licensing through existing Actions settings, mapping only the
+  selected backend to `FCLI_DEFAULT_*` with configuration checks and fake-executor tests.
+
+### Initial remote attempt
+
+[Run 44129681714](https://github.com/fortify-presales/IWA-Agentic/actions/runs/44129681714)
+at `76b137a124660862b9c91e6dfbc3087653057842` passed all 9 hosted helper tests and reached
+`aws-ubuntu-runner-01`. FAA 26.4.0 was invoked but exited 1: "Fortify license validation is
+required." The failure execution record was retained; no SARIF or FAA Markdown was produced.
+This is not successful FAA execution evidence. T013/T020 remain open pending the configured retry.
 
 ## Dependencies
 
 T003 precedes T004; T004 precedes T005/T007; T010 follows T003–T009.
 T011 precedes T012; T013 is required before claiming remote execution is proven.
 T017/T018 precede T019; T019 precedes T020, which provides the evidence for T013.
+T021 precedes the configured T020 retry.
 T015/T016 remain separate later milestones, not part of the manual-only smoke test.

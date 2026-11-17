@@ -25,6 +25,10 @@ The source checkout supplies only Git diff data. Existing FoD/ScanCentral workfl
 - **Confirmed runner**: `aws-ubuntu-runner-01`, labels `[self-hosted, Linux, X64, fortify, faa]`.
 - **Live-run prerequisites**: verify runner service-account FAA 26.4.0 service/license/provider
   configuration and isolation. Actual FoD release IDs/authentication are needed only for later import.
+- **Licensing configuration**: `FAA_LICENSE_PLATFORM` selects `fod` (default) or `ssc`.
+  Map existing Actions URL variables and credential secrets to `FCLI_DEFAULT_*` only for the
+  FAA step. Validate selected settings and exclude the other backend from FAA's environment.
+  Platform licensing is distinct from later FoD result import.
 
 ## Constitution Check
 

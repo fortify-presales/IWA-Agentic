@@ -61,6 +61,9 @@ syntax in paths remain data. Invalid UTF-8 filenames fail explicitly.
 - **FR-010**: Allow smoke execution only in `fortify-presales/IWA-Agentic` on `main` or
   `feature/020-faa-risk-pilot`. Register a notice-only dispatcher on `main`, then prove real
   feature-branch execution before merging the complete pilot.
+- **FR-011**: Select FoD or SSC licensing through `FAA_LICENSE_PLATFORM` (default `fod`).
+  Map existing Actions settings to the selected backend's `FCLI_DEFAULT_*` environment names,
+  require its URL/credentials before invoking FAA, and keep credentials out of arguments/evidence.
 
 ## Out of Scope
 

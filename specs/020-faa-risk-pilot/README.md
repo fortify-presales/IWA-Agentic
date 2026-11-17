@@ -105,7 +105,38 @@ The registered runner `aws-ubuntu-runner-01` has labels `self-hosted`, `Linux`, 
 The runner must provide Git and FAA **26.4.0** on PATH, with its provider/model, service/license
 access, and network access already configured for the runner service account. `actions/setup-node`
 provisions Node 20; no application dependencies are installed. This workflow does not provision
-fcli, log into FoD, run a live self-test, or inject new credentials.
+fcli, log into FoD/SSC, or run a live self-test. It maps existing Actions settings explicitly
+for FAA's license validation; settings consumed by `fortify/github-action` are not automatically
+exported when running FAA directly.
+
+### FoD or SSC licensing configuration
+
+Set the repository variable `FAA_LICENSE_PLATFORM` to `fod` or `ssc` (lowercase). If unset or
+empty, the workflow uses `fod`, matching the pilot preference. This selector does not change
+the differential scan mode or introduce platform scans/imports.
+
+Reuse these Actions settings; shared organization settings must grant this repository access:
+
+| Backend | Actions setting | Type | FAA environment variable |
+|---------|-----------------|------|--------------------------|
+| FoD | `FOD_URL` | Variable | `FCLI_DEFAULT_FOD_URL` |
+| FoD | `FOD_CLIENT_ID` | Secret | `FCLI_DEFAULT_FOD_CLIENT_ID` |
+| FoD | `FOD_CLIENT_SECRET` | Secret | `FCLI_DEFAULT_FOD_CLIENT_SECRET` |
+| SSC | `SSC_URL` | Variable | `FCLI_DEFAULT_SSC_URL` |
+| SSC | `SSC_TOKEN` | Secret | `FCLI_DEFAULT_SSC_TOKEN` |
+
+Keep credentials in secrets, not variables or workflow files. Only the selected backend is
+provided to the FAA step; the helper also removes inherited `FCLI_DEFAULT_*` settings for the
+other backend from FAA's child environment before both `-help` and `-scan`. FAA rejects mixed
+FoD/SSC namespaces, so unused keys are removed entirely, not merely set to empty strings.
+Missing selected settings and invalid selectors fail
+before invoking FAA, naming the missing setting without printing its value.
+Credentials are not command-line arguments or execution-record fields. The selector is recorded
+as configuration, not proof that license validation or scanning succeeded.
+
+If FAA still reports that license validation is required, validate the selected Fortify
+configuration under the runner service account using `fortifyaa -license` before retrying.
+Do not copy tokens or license-cache contents into logs, artifacts or this repository.
 
 ### Test the feature branch before merging the pilot
 
@@ -173,7 +204,7 @@ Artifacts, retained for 14 days:
 
 - `faa.sarif`: FAA findings (zero findings is a valid result).
 - `faa-summary.md`: FAA's Markdown summary.
-- `faa-execution.json`: dispatched ref, range, exact SHAs, run/attempt/build identity, version, scan invocation,
+- `faa-execution.json`: dispatched ref, configured license backend, range, exact SHAs, run/attempt/build identity, version, scan invocation,
   analyzer exit status, duration, and success/failure.
 - `faa-execution-summary.md`: concise workflow summary.
 

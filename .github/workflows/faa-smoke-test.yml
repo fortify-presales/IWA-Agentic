@@ -46,6 +46,7 @@ jobs:
     timeout-minutes: 60
     env:
       FAA_BASE_SHA: ${{ inputs.base_sha }}
+      FAA_LICENSE_PLATFORM: ${{ vars.FAA_LICENSE_PLATFORM || 'fod' }}
     steps:
       - name: Check out the exact dispatched commit
         uses: actions/checkout@v4
@@ -60,6 +61,12 @@ jobs:
         id: faa
         env:
           FAA_OUTPUT_DIR: ${{ runner.temp }}/faa-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          # The helper removes the unselected namespace before every FAA invocation.
+          FCLI_DEFAULT_FOD_URL: ${{ env.FAA_LICENSE_PLATFORM == 'fod' && vars.FOD_URL || '' }}
+          FCLI_DEFAULT_FOD_CLIENT_ID: ${{ env.FAA_LICENSE_PLATFORM == 'fod' && secrets.FOD_CLIENT_ID || '' }}
+          FCLI_DEFAULT_FOD_CLIENT_SECRET: ${{ env.FAA_LICENSE_PLATFORM == 'fod' && secrets.FOD_CLIENT_SECRET || '' }}
+          FCLI_DEFAULT_SSC_URL: ${{ env.FAA_LICENSE_PLATFORM == 'ssc' && vars.SSC_URL || '' }}
+          FCLI_DEFAULT_SSC_TOKEN: ${{ env.FAA_LICENSE_PLATFORM == 'ssc' && secrets.SSC_TOKEN || '' }}
         run: node .github/scripts/faa-smoke-test.mjs
       - name: Retain scan outputs and execution record
         if: always() && steps.faa.outcome != 'skipped'

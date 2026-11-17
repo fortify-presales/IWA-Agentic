@@ -25,6 +25,21 @@ export async function runSmokeTest({ sourceDir, outputDir, env = process.env, ex
       && ['refs/heads/main', 'refs/heads/feature/020-faa-risk-pilot'].includes(env.GITHUB_REF),
     'Only main or feature/020-faa-risk-pilot dispatches in fortify-presales/IWA-Agentic are allowed');
     requireValue(/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? ''), 'Invalid dispatched commit SHA');
+    const licensePlatform = env.FAA_LICENSE_PLATFORM;
+    requireValue(['fod', 'ssc'].includes(licensePlatform), 'FAA_LICENSE_PLATFORM must be fod or ssc');
+    record.licensePlatform = licensePlatform;
+    const licenseKeys = licensePlatform === 'fod'
+      ? ['FCLI_DEFAULT_FOD_URL', 'FCLI_DEFAULT_FOD_CLIENT_ID', 'FCLI_DEFAULT_FOD_CLIENT_SECRET']
+      : ['FCLI_DEFAULT_SSC_URL', 'FCLI_DEFAULT_SSC_TOKEN'];
+    for (const key of licenseKeys) {
+      requireValue(typeof env[key] === 'string' && env[key].trim().length > 0,
+        `Missing ${key}; configure the selected FAA license backend in Actions`);
+    }
+    const analyzerEnv = { ...env };
+    const unusedPrefix = licensePlatform === 'fod' ? 'FCLI_DEFAULT_SSC_' : 'FCLI_DEFAULT_FOD_';
+    for (const key of Object.keys(analyzerEnv)) {
+      if (key.startsWith(unusedPrefix)) delete analyzerEnv[key];
+    }
     for (const key of ['GITHUB_REPOSITORY_ID', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT']) {
       requireValue(/^[1-9][0-9]*$/.test(env[key] ?? ''), `Missing/invalid ${key}`);
     }
@@ -48,7 +63,7 @@ export async function runSmokeTest({ sourceDir, outputDir, env = process.env, ex
       buildId: `github-${env.GITHUB_REPOSITORY_ID}-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`,
     });
     const help = execute('fortifyaa', ['-help'], {
-      encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
+      env: analyzerEnv, encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     });
     requireValue(/\b26\.4\.0\b/.test(help), 'This smoke test requires FAA 26.4.0 on PATH');
     record.analyzerVersion = '26.4.0';
@@ -58,7 +73,7 @@ export async function runSmokeTest({ sourceDir, outputDir, env = process.env, ex
       '--output', join(outputDir, 'faa.sarif'), '--output-format', 'sarif,md-summary',
       '--output-md-summary', join(outputDir, 'faa-summary.md'), '--message-format', 'plain',
       '-b', record.buildId,
-    ], { cwd: sourceDir, stdio: 'inherit' });
+    ], { cwd: sourceDir, env: analyzerEnv, stdio: 'inherit' });
     record.analyzerExitCode = 0;
     const sarif = JSON.parse(await readFile(join(outputDir, 'faa.sarif'), 'utf8'));
     requireValue(sarif?.version === '2.1.0' && Array.isArray(sarif.runs) && sarif.runs.length > 0, 'FAA did not produce a valid SARIF run');
@@ -79,6 +94,7 @@ export async function runSmokeTest({ sourceDir, outputDir, env = process.env, ex
   const summary = [
     '## FAA differential smoke test', '',
     `Status: **${record.status}**`,
+    `Configured license backend: \`${record.licensePlatform ?? 'not configured'}\``,
     `FAA scan invoked: **${record.analyzerInvoked ? 'yes' : 'no'}**`,
     `Range: \`${record.range ?? 'not resolved'}\``,
     `Duration: ${record.durationMs} ms`,

@@ -33,6 +33,8 @@ A separate manually dispatched FAA 26.4.0 differential smoke workflow permits `m
 approved `feature/020-faa-risk-pilot` branch on the confirmed self-hosted runner labels.
 Register a harmless dispatcher stub on `main`, then prove feature-branch execution before
 merging the complete pilot. It has no full/incremental fallback or FoD integration.
+`FAA_LICENSE_PLATFORM` selects FoD (default) or SSC for licensing only, explicitly mapping
+existing Actions URL variables and credential secrets to the selected `FCLI_DEFAULT_*` names.
 Actual remote execution must still be verified; FoD import and conditional PR scans remain deferred.
 A risk decision must not be presented as a completed FAA scan. The remaining enterprise requirements describe
 later milestones unless included in the scoped pilot specification.
