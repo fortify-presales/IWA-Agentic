@@ -138,6 +138,18 @@ If FAA still reports that license validation is required, validate the selected 
 configuration under the runner service account using `fortifyaa -license` before retrying.
 Do not copy tokens or license-cache contents into logs, artifacts or this repository.
 
+### LLM provider authentication
+
+Fortify licensing and LLM authentication are independent. The runner's external FAA policy
+selects the agent, provider, models and cost limits. For its configured OpenAI provider, the
+workflow maps the existing Actions secret `OPENAI_API_KEY` into the FAA step only; organization
+secret access must include this repository. The helper forwards it through the child environment,
+never through arguments or execution records.
+
+Other providers require their own approved configuration or a credential store initialized with
+`fortifyaa -pilogin` under the runner service account. This workflow does not select a different
+provider or perform an interactive login if credentials are unavailable.
+
 ### Test the feature branch before merging the pilot
 
 GitHub requires a `workflow_dispatch` workflow to exist on the default branch before it can be

@@ -72,6 +72,8 @@
   execution records, SARIF, and Markdown before merging the complete pilot.
 - [x] T021 Add selectable FoD/SSC licensing through existing Actions settings, mapping only the
   selected backend to `FCLI_DEFAULT_*` with configuration checks and fake-executor tests.
+- [x] T022 Map the existing `OPENAI_API_KEY` Actions secret into the FAA step only, forwarding
+  it through the child environment without exposing it in arguments or execution evidence.
 
 ### Initial remote attempt
 
@@ -81,10 +83,19 @@ at `76b137a124660862b9c91e6dfbc3087653057842` passed all 9 hosted helper tests a
 required." The failure execution record was retained; no SARIF or FAA Markdown was produced.
 This is not successful FAA execution evidence. T013/T020 remain open pending the configured retry.
 
+### FoD-configured retry
+
+[Run 44136180743](https://github.com/fortify-presales/IWA-Agentic/actions/runs/44136180743)
+at `8bb31f23767d4153e3ec0d6df14e87d2e66030d2` passed all 12 hosted helper tests. FAA explicitly
+reported "License: Fortify access verified." It then exited 1 because provider `openai` was
+unavailable with the current credentials. No SARIF or FAA Markdown was produced. The license
+mapping is verified; successful scanning remains unproven pending the LLM-authenticated retry.
+
 ## Dependencies
 
 T003 precedes T004; T004 precedes T005/T007; T010 follows T003–T009.
 T011 precedes T012; T013 is required before claiming remote execution is proven.
 T017/T018 precede T019; T019 precedes T020, which provides the evidence for T013.
 T021 precedes the configured T020 retry.
+T022 precedes the LLM-authenticated T020 retry.
 T015/T016 remain separate later milestones, not part of the manual-only smoke test.

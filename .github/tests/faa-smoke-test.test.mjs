@@ -93,14 +93,17 @@ for (const platform of ['fod', 'ssc']) {
     f.env.FAA_LICENSE_PLATFORM = platform;
     f.env.FCLI_DEFAULT_SSC_URL = 'https://ssc.example.invalid/ssc';
     f.env.FCLI_DEFAULT_SSC_TOKEN = 'test-ssc-token';
+    f.env.OPENAI_API_KEY = 'test-openai-api-key';
     const selectedKey = platform === 'fod' ? 'FCLI_DEFAULT_FOD_CLIENT_SECRET' : 'FCLI_DEFAULT_SSC_TOKEN';
     const unusedPrefix = platform === 'fod' ? 'FCLI_DEFAULT_SSC_' : 'FCLI_DEFAULT_FOD_';
     f.env[`${unusedPrefix}USER`] = 'unused-runner-user';
     const execute = (command, args, options) => {
       if (command === 'fortifyaa') {
         assert.equal(options.env[selectedKey], f.env[selectedKey]);
+        assert.equal(options.env.OPENAI_API_KEY, f.env.OPENAI_API_KEY);
         assert.ok(!Object.keys(options.env).some((key) => key.startsWith(unusedPrefix)));
         assert.ok(!args.some((arg) => arg.includes(f.env[selectedKey])));
+        assert.ok(!args.some((arg) => arg.includes(f.env.OPENAI_API_KEY)));
       }
       return f.execute(command, args, options);
     };
@@ -111,6 +114,7 @@ for (const platform of ['fod', 'ssc']) {
       const output = await readFile(join(f.outputDir, file), 'utf8');
       assert.ok(!output.includes(f.env.FCLI_DEFAULT_FOD_CLIENT_SECRET));
       assert.ok(!output.includes(f.env.FCLI_DEFAULT_SSC_TOKEN));
+      assert.ok(!output.includes(f.env.OPENAI_API_KEY));
     }
   });
 }
