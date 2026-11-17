@@ -43,3 +43,7 @@ When using `/fortify-remediate`, ScanCentral-created SAST finding paths may be p
 Non-trivial features should have a `specs/<NNN>-<feature-slug>/` folder with `spec.md`, `plan.md`,
 and `tasks.md`, copied from `specs/templates/`. Read `specs/memory/constitution.md` first — it is
 the source of truth for the principles condensed above. See `specs/README.md` for the full workflow.
+
+## Commit Messages
+
+Do not add `Co-authored-by` trailers or AI co-author attribution to suggested or created commit messages in this repository.

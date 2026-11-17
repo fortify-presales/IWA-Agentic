@@ -1,6 +1,6 @@
-[![Build and Test](https://github.com/fortify-presales/IWA-NodeJS/actions/workflows/ci.yml/badge.svg)](https://github.com/fortify-presales/IWA-NodeJS/actions/workflows/ci.yml)
-[![Fortify on Demand Scan](https://github.com/fortify-presales/IWA-NodeJS/actions/workflows/fod.yml/badge.svg)](https://github.com/fortify-presales/IWA-NodeJS/actions/workflows/fod.yml)
-[![Fortify ScanCentral Scan](https://github.com/fortify-presales/IWA-NodeJS/actions/workflows/scancentral.yml/badge.svg)](https://github.com/fortify-presales/IWA-NodeJS/actions/workflows/scancentral.yml)
+[![Build and Test](https://github.com/fortify-presales/IWA-Agentic/actions/workflows/ci.yml/badge.svg)](https://github.com/fortify-presales/IWA-Agentic/actions/workflows/ci.yml)
+[![Fortify on Demand Scan](https://github.com/fortify-presales/IWA-Agentic/actions/workflows/fod.yml/badge.svg)](https://github.com/fortify-presales/IWA-Agentic/actions/workflows/fod.yml)
+[![Fortify ScanCentral Scan](https://github.com/fortify-presales/IWA-Agentic/actions/workflows/scancentral.yml/badge.svg)](https://github.com/fortify-presales/IWA-Agentic/actions/workflows/scancentral.yml)
 
 # IWA Pharmacy Direct — Node.js
 

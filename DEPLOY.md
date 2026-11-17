@@ -18,8 +18,8 @@ For example:
 
 | Repository                    | Image                                 |
 | ----------------------------- | ------------------------------------- |
-| `fortify-presales/IWA-NodeJS` | `ghcr.io/fortify-presales/iwa-nodejs` |
-| `example-org/IWA-NodeJS`      | `ghcr.io/example-org/iwa-nodejs`      |
+| `fortify-presales/IWA-Agentic` | `ghcr.io/fortify-presales/iwa-agentic` |
+| `example-org/IWA-Agentic`      | `ghcr.io/example-org/iwa-agentic`      |
 | `alex/iwa-demo`               | `ghcr.io/alex/iwa-demo`               |
 
 If you deploy from a fork, configure the Azure Web App to pull the image created under the fork owner's namespace. Ensure the fork owner or organization allows GitHub Actions to create packages and that the resulting GHCR package is public. The workflow already grants its `GITHUB_TOKEN` the `packages: write` permission needed to publish the image.

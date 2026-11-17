@@ -1,27 +1,71 @@
 name: FAA Differential Smoke Test
-run-name: FAA dispatcher registration only (no scan)
 
 on:
   workflow_dispatch:
     inputs:
       base_sha:
-        description: Ignored by this stub; select feature/020-faa-risk-pilot to run FAA with an ancestor SHA
+        description: Earlier ancestor SHA (40 hex characters); blank uses the dispatched commit's first parent
         required: false
         type: string
 
-permissions: {}
+permissions:
+  contents: read
+
+concurrency:
+  group: faa-smoke-${{ github.repository_id }}
+  cancel-in-progress: false
 
 jobs:
-  registration:
-    name: Registration only - FAA is not executed
+  validate:
+    name: Validate trusted dispatch and smoke-test helper
     runs-on: ubuntu-latest
     steps:
-      - name: Explain feature-branch smoke testing
+      - name: Require this repository and an approved branch
         shell: bash
         run: |
-          echo "::notice::Registration only. No checkout or FAA scan is performed."
-          {
-            echo "## Dispatcher registration only"
-            echo "No FAA scan was performed. This successful notice job does not prove FAA execution."
-            echo 'Select the reviewed `feature/020-faa-risk-pilot` branch when dispatching the real smoke test.'
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$GITHUB_REPOSITORY" != "fortify-presales/IWA-Agentic" ||
+                ( "$GITHUB_REF" != "refs/heads/main" && "$GITHUB_REF" != "refs/heads/feature/020-faa-risk-pilot" ) ]]; then
+            echo "::error::Dispatch from main or feature/020-faa-risk-pilot in fortify-presales/IWA-Agentic only."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Test without invoking FAA
+        run: node --test .github/tests/faa-smoke-test.test.mjs
+
+  scan:
+    name: FAA change-driven scan only
+    needs: validate
+    if: github.repository == 'fortify-presales/IWA-Agentic' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/020-faa-risk-pilot')
+    runs-on: [self-hosted, Linux, X64, fortify, faa]
+    timeout-minutes: 60
+    env:
+      FAA_BASE_SHA: ${{ inputs.base_sha }}
+    steps:
+      - name: Check out the exact dispatched commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run FAA differential analysis
+        id: faa
+        env:
+          FAA_OUTPUT_DIR: ${{ runner.temp }}/faa-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+        run: node .github/scripts/faa-smoke-test.mjs
+      - name: Retain scan outputs and execution record
+        if: always() && steps.faa.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: faa-smoke-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/faa-smoke-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 14
