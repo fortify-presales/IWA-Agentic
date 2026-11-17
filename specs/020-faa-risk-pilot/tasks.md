@@ -35,7 +35,7 @@
 - `git --no-pager diff --check` — passed.
 - `node node_modules\eslint\bin\eslint.js .github\scripts\faa-risk-adapter.mjs .github\tests\faa-risk-adapter.test.mjs`
   — unavailable: repository dependencies are not installed. No dependency restoration was performed.
-- Node 20 Windows/Linux/macOS jobs are configured, but hosted execution remains unverified until rollout.
+- The assessment workflow's Node 20 Windows/Linux/macOS matrix remains unverified until rollout.
 - Static change review: JSON is data-only; subprocesses use argument arrays and validated SHAs;
   PR paths are evidence, not filesystem destinations; no PR code execution or new credential access.
 
@@ -43,7 +43,7 @@
 
 - [x] T011 Confirm runner labels and agree manual differential scope on `main` and the named pilot branch.
 - [x] T012 Add `.github/workflows/faa-smoke-test.yml` and testable Node helper, without FoD import.
-- [ ] T013 Verify a real remote smoke run, including provider/service/license access and artifact output.
+- [x] T013 Verify a real remote smoke run, including provider/service/license access and artifact output.
 - [ ] T014 Confirm control owners, add CODEOWNERS, and optionally add a single updated PR comment.
 - [ ] T015 Separately confirm FoD IDs/authentication and implement dedicated-release import.
 - [ ] T016 Separately design isolated, conditional exact-head-SHA execution for selected assessments.
@@ -57,8 +57,8 @@
 - `actionlint.exe -config-file .github\actionlint.yaml -shellcheck= -pyflakes= .github\workflows\faa-smoke-test.yml .github\workflows\faa-risk-assessment.yml`
   — passed using checksum-verified actionlint 1.7.7; configuration allowlists the registered custom runner labels.
 - `git --no-pager diff --check` — passed.
-- Hosted workflow/self-hosted FAA execution remains unverified. Only the harmless dispatcher
-  stub must be merged into `main` first; test the full feature workflow before merging the pilot.
+- Hosted helper validation and self-hosted FAA execution with FoD licensing are verified below.
+  SSC licensing remains covered by fake-executor tests only. The full pilot is not merged.
 
 ## Phase 6: Feature-Branch Rollout
 
@@ -68,7 +68,7 @@
   ([#24](https://github.com/fortify-presales/IWA-Agentic/pull/24)).
 - [x] T019 Incorporate that bootstrap base, then publish the reviewed pilot feature branch
   (`76b137a124660862b9c91e6dfbc3087653057842`).
-- [ ] T020 Dispatch the feature workflow with a reviewed source-change base and inspect real
+- [x] T020 Dispatch the feature workflow with a reviewed source-change base and inspect real
   execution records, SARIF, and Markdown before merging the complete pilot.
 - [x] T021 Add selectable FoD/SSC licensing through existing Actions settings, mapping only the
   selected backend to `FCLI_DEFAULT_*` with configuration checks and fake-executor tests.
@@ -81,7 +81,7 @@
 at `76b137a124660862b9c91e6dfbc3087653057842` passed all 9 hosted helper tests and reached
 `aws-ubuntu-runner-01`. FAA 26.4.0 was invoked but exited 1: "Fortify license validation is
 required." The failure execution record was retained; no SARIF or FAA Markdown was produced.
-This is not successful FAA execution evidence. T013/T020 remain open pending the configured retry.
+This initial attempt is not successful FAA execution evidence; see the successful retry below.
 
 ### FoD-configured retry
 
@@ -89,7 +89,23 @@ This is not successful FAA execution evidence. T013/T020 remain open pending the
 at `8bb31f23767d4153e3ec0d6df14e87d2e66030d2` passed all 12 hosted helper tests. FAA explicitly
 reported "License: Fortify access verified." It then exited 1 because provider `openai` was
 unavailable with the current credentials. No SARIF or FAA Markdown was produced. The license
-mapping is verified; successful scanning remains unproven pending the LLM-authenticated retry.
+mapping is verified; successful scanning was subsequently proven by the LLM-authenticated retry below.
+
+### Successful LLM-authenticated retry
+
+[Run 44138006070](https://github.com/fortify-presales/IWA-Agentic/actions/runs/44138006070)
+at `e437597c24478f7c284d37d54b0d9347851403fa` passed all 12 hosted helper tests and completed
+FAA 26.4.0 on `aws-ubuntu-runner-01`. The exact base was
+`25a47cac029e3d78cf9e56eb78f736325ef060d1`; differential scope was `packages`, with one changed
+file. Execution metadata records `licensePlatform: fod`, `analyzerInvoked: true`,
+`analyzerExitCode: 0`, `status: succeeded`, duration 48,058 ms and unique build ID
+`github-1345239625-44138006070-1`.
+
+Downloaded artifacts were checked: SARIF 2.1.0, one run, tool `FORTIFY_AA 26.4.0`, zero findings,
+and nonempty FAA Markdown summary. Logs confirmed plan/analysis/validation model stages.
+No FoD import, full/incremental fallback, application build or full-pilot merge occurred.
+T013/T020 are complete for the FoD path; live SSC verification and the assessment workflow's
+post-merge matrix remain separate.
 
 ## Dependencies
 

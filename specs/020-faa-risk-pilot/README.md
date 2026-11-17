@@ -230,6 +230,27 @@ and confirm retention before use. Dispatch is not a sandbox: use a dedicated lea
 review changes on both allowed branches before dispatch, and govern FAA agent capabilities through its external policy.
 Do not extend this job to forks or arbitrary PR branches on a persistent/shared runner.
 
+### Verified feature-branch smoke run
+
+[Run 44138006070](https://github.com/fortify-presales/IWA-Agentic/actions/runs/44138006070)
+completed successfully on `aws-ubuntu-runner-01` with FAA **26.4.0**, FoD licensing and the
+configured OpenAI provider. All 12 hosted helper tests passed.
+
+- Scanned head: `e437597c24478f7c284d37d54b0d9347851403fa`.
+- Base: `25a47cac029e3d78cf9e56eb78f736325ef060d1`.
+- Mode/scope: differential, `packages`; one changed file, `packages/web/src/publicPages.tsx`.
+- Execution: analyzer invoked, exit 0, `status: succeeded`, duration 48,058 ms.
+- Outputs: SARIF 2.1.0 from `FORTIFY_AA 26.4.0` and a nonempty FAA Markdown summary;
+  zero findings. Logs confirmed plan/analysis/validation model stages.
+- Artifact: `faa-smoke-e437597c24478f7c284d37d54b0d9347851403fa-44138006070-1`.
+
+The repository selector is explicitly `FAA_LICENSE_PLATFORM=fod`. SSC licensing is covered by
+fake-executor tests, not a live SSC run. This narrow differential result is not a full application
+security assessment and does not imply the application's existing intentional vulnerabilities
+are absent. Subsequent documentation-only evidence commits do not change the scanned tooling
+or application code. Only the dispatcher bootstrap was merged; the complete pilot remains on
+the feature branch for review.
+
 ## Deferred FoD and conditional execution milestones
 
 The manual smoke test is independent of risk scoring. Selected assessment decisions still use the
