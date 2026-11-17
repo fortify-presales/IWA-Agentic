@@ -1,0 +1,27 @@
+name: FAA Differential Smoke Test
+run-name: FAA dispatcher registration only (no scan)
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: Ignored by this stub; select feature/020-faa-risk-pilot to run FAA with an ancestor SHA
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  registration:
+    name: Registration only - FAA is not executed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain feature-branch smoke testing
+        shell: bash
+        run: |
+          echo "::notice::Registration only. No checkout or FAA scan is performed."
+          {
+            echo "## Dispatcher registration only"
+            echo "No FAA scan was performed. This successful notice job does not prove FAA execution."
+            echo 'Select the reviewed `feature/020-faa-risk-pilot` branch when dispatching the real smoke test.'
+          } >> "$GITHUB_STEP_SUMMARY"
