@@ -1,12 +1,11 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, TextDecoder } from 'node:util';
-import { selectExecution } from './faa-execution.mjs';
 
-const policyPath = fileURLToPath(new URL('../faa-policy.json', import.meta.url));
+const defaultPolicyPath = fileURLToPath(new URL('../faa-policy.json', import.meta.url));
 const declarations = {
   ai: ['AI assistance used', ['none', 'low', 'significant', 'predominant']],
   reviewed: ['AI-generated code manually reviewed', ['yes', 'no', 'not-applicable']],
@@ -33,9 +32,6 @@ const scoreNames = [
   ...Object.keys(pathSignals), 'predominant-ai', 'significant-ai', 'unreviewed-ai',
   'large-change', 'new-dependency',
 ];
-const mandatorySignals = new Set([
-  'authentication-authorization', 'secrets-vault', 'previous-incident-area',
-]);
 const notEvaluated = [
   'live-fod-ssc-metadata', 'faa-baseline-age', 'finding-suppressions',
   'repository-topics', 'release-tags', 'semantic-api-and-dependency-diffs',
@@ -55,7 +51,11 @@ function matches(path, patterns) {
 
 export function validatePolicy(policy) {
   requireValue(policy?.version === 'pilot-1' && policy.mode === 'audit', 'Unsupported pilot policy version or mode');
-  requireValue(typeof policy.repository === 'string' && /^[\w.-]+\/[\w.-]+$/.test(policy.repository), 'Invalid policy repository');
+  requireValue(Array.isArray(policy.mandatorySignals)
+    && policy.mandatorySignals.every((name) => Object.hasOwn(pathSignals, name)), 'Invalid mandatory signals');
+  requireValue(typeof policy.mandatoryInternetApi === 'boolean', 'Invalid mandatory internet API setting');
+  requireValue(Array.isArray(policy.requiredLabels)
+    && policy.requiredLabels.every((name) => typeof name === 'string' && name.length > 0), 'Invalid required labels');
   const app = policy.application;
   requireValue(['tier-1', 'tier-2', 'tier-3'].includes(app?.tier), 'Invalid application tier');
   requireValue(typeof app.internetFacing === 'boolean', 'Missing/invalid internetFacing metadata');
@@ -123,7 +123,9 @@ export function parseNumstat(buffer) {
 export function assessPullRequest(event, changes, policy, context = {}) {
   validatePolicy(policy);
   const pr = event?.pull_request;
-  requireValue(positiveInteger(event?.repository?.id) && event.repository.full_name === policy.repository, 'Missing/mismatched repository identity');
+  requireValue(positiveInteger(event?.repository?.id)
+    && typeof event.repository.full_name === 'string'
+    && /^[\w.-]+\/[\w.-]+$/.test(event.repository.full_name), 'Missing/invalid repository identity');
   requireValue(positiveInteger(pr?.number) && pr.base?.repo?.id === event.repository.id, 'Invalid PR identity');
   requireValue(/^[a-f0-9]{40}$/.test(pr.base.sha) && /^[a-f0-9]{40}$/.test(pr.head?.sha), 'Invalid base/head SHA');
   requireValue(pr.draft === false, 'Draft PRs are not assessed');
@@ -155,7 +157,8 @@ export function assessPullRequest(event, changes, policy, context = {}) {
     }
     for (const path of supportingPaths) sensitivePaths.add(path);
     if (declared(field).length) declaredSensitive = true;
-    add(signal, reason, evidence, mandatorySignals.has(signal) || (signal === 'new-api' && exposure.length > 0));
+    add(signal, reason, evidence, policy.mandatorySignals.includes(signal)
+      || (policy.mandatoryInternetApi && signal === 'new-api' && exposure.length > 0));
   }
   if (declaration.values.ai === 'predominant') add('predominant-ai', 'Predominantly AI-assisted change', ['declaration:AI assistance used']);
   if (declaration.values.ai === 'significant') add('significant-ai', 'Significantly AI-assisted change', ['declaration:AI assistance used']);
@@ -177,19 +180,18 @@ export function assessPullRequest(event, changes, policy, context = {}) {
   add('new-dependency', 'Dependency manifest/lock file or declaration changed', [
     ...paths.filter((path) => matches(path, policy.dependencyPatterns)), ...declared('dependency'),
   ]);
-  if (pr.labels.some((label) => label.name === 'faa-required')) {
-    add('faa-required', 'FAA explicitly required by PR label', ['label:faa-required'], true);
-  }
+  add('faa-required', 'FAA explicitly required by PR label',
+    pr.labels.filter((label) => policy.requiredLabels.includes(label.name)).map((label) => `label:${label.name}`), true);
   const score = Math.max(0, reasons.reduce((total, reason) => total + reason.points, 0));
   const mandatory = reasons.some((reason) => reason.mandatory) || score >= policy.thresholds.mandatory;
   const decision = mandatory ? 'faa-mandatory' : score >= policy.thresholds.recommended ? 'faa-recommended' : 'sast-sca-only';
   return {
-    policyVersion: policy.version, mode: policy.mode, repository: policy.repository,
+    policyVersion: policy.version, mode: policy.mode, repository: event.repository.full_name,
     repositoryId: event.repository.id, pullRequest: pr.number, baseSha: pr.base.sha, headSha: pr.head.sha,
     ...context, score, mandatory, decision, changedLines, highRiskChangedLines, thresholds: policy.thresholds, reasons,
     application: app,
     metadataProvenance: Object.keys(app).map((field) => ({
-      field, value: app[field], source: 'trusted-policy', sourceObject: context.policySha256 ?? policy.version,
+      field, value: app[field], source: 'policy', sourceObject: context.policySha256 ?? policy.version,
       sourceField: `application.${field}`, retrievedAt: context.assessedAt ?? null,
     })),
     declarations: declaration.values, declarationIssues: declaration.issues, conflicts,
@@ -227,7 +229,7 @@ function git(sourceDir, args) {
   });
 }
 
-export async function runAdapter({ eventPath, sourceDir, outputDir, env = process.env }) {
+export async function runAdapter({ eventPath, sourceDir, outputDir, policyPath = defaultPolicyPath, env = process.env }) {
   const event = JSON.parse(await readFile(eventPath, 'utf8'));
   const policyText = await readFile(policyPath, 'utf8');
   const policy = validatePolicy(JSON.parse(policyText));
@@ -240,24 +242,27 @@ export async function runAdapter({ eventPath, sourceDir, outputDir, env = proces
     '-c', 'core.quotepath=false', 'diff', '--no-ext-diff', '--no-textconv',
     '--find-renames', '--numstat', '-z', diffBaseSha, pr.head.sha, '--',
   ]));
-  const controlSha = git(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), ['rev-parse', 'HEAD']).toString().trim();
-  if (env.FAA_TRUSTED_CONTROL_SHA) {
-    requireValue(controlSha === env.FAA_TRUSTED_CONTROL_SHA && controlSha === pr.base.sha, 'Control checkout does not match trusted PR base');
-  }
   const assessedAt = new Date().toISOString();
   const result = validateResult(assessPullRequest(event, changes, policy, {
-    assessedAt, diffBaseSha, controlSha,
+    assessedAt, diffBaseSha, changeRange: `${diffBaseSha}..${pr.head.sha}`,
     policySha256: createHash('sha256').update(policyText).digest('hex'),
     assessmentId: `${event.repository.id}:${pr.number}:${pr.head.sha}:${env.GITHUB_RUN_ID ?? 'local'}:${env.GITHUB_RUN_ATTEMPT ?? '1'}`,
   }));
-  result.faaExecution.status = selectExecution(result, event, env.FAA_PR_SCANS_ENABLED);
+  const hasChanges = git(sourceDir, [
+    'diff', '--no-ext-diff', '--no-textconv', '--name-only', '--diff-filter=ACMRT',
+    '-z', diffBaseSha, pr.head.sha, '--',
+  ]).length > 0;
+  result.doFaa = result.mandatory && hasChanges && pr.head.repo?.id === event.repository.id;
+  if (result.mandatory && !result.doFaa) {
+    result.faaExecution.status = pr.head.repo?.id !== event.repository.id ? 'skipped-fork' : 'skipped-no-changes';
+  }
   const summary = formatSummary(result);
   await mkdir(outputDir, { recursive: true });
   await writeFile(join(outputDir, 'faa-risk-result.json'), `${JSON.stringify(result, null, 2)}\n`);
   await writeFile(join(outputDir, 'faa-risk-summary.md'), summary);
   if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, summary);
   if (env.GITHUB_OUTPUT) {
-    await appendFile(env.GITHUB_OUTPUT, `score=${result.score}\nmandatory=${result.mandatory}\ndecision=${result.decision}\nexecute_faa=${result.faaExecution.status === 'pending-execution'}\n`);
+    await appendFile(env.GITHUB_OUTPUT, `score=${result.score}\nmandatory=${result.mandatory}\ndecision=${result.decision}\ndo_faa=${result.doFaa}\nchange_range=${result.changeRange}\n`);
   }
   return result;
 }
@@ -265,11 +270,14 @@ export async function runAdapter({ eventPath, sourceDir, outputDir, env = proces
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const { values } = parseArgs({
-      options: { event: { type: 'string' }, source: { type: 'string' }, output: { type: 'string' } },
+      options: { event: { type: 'string' }, source: { type: 'string' }, output: { type: 'string' }, policy: { type: 'string' } },
     });
     const eventPath = values.event ?? process.env.GITHUB_EVENT_PATH;
-    requireValue(eventPath && values.source && values.output, 'Usage: node faa-risk-adapter.mjs --event <event.json> --source <head-checkout> --output <directory>');
-    const result = await runAdapter({ eventPath, sourceDir: resolve(values.source), outputDir: resolve(values.output) });
+    requireValue(eventPath && values.source && values.output, 'Usage: node faa-risk-adapter.mjs --event <event.json> --source <head-checkout> --output <directory> [--policy <policy.json>]');
+    const result = await runAdapter({
+      eventPath, sourceDir: resolve(values.source), outputDir: resolve(values.output),
+      policyPath: values.policy ? resolve(values.policy) : defaultPolicyPath,
+    });
     console.log(`FAA risk: score=${result.score}, mandatory=${result.mandatory}, decision=${result.decision}`);
   } catch (error) {
     console.error(`FAA assessment failed: ${JSON.stringify(error.message)}`);

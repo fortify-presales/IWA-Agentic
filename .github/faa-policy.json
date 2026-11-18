@@ -1,7 +1,9 @@
 {
   "version": "pilot-1",
   "mode": "audit",
-  "repository": "fortify-presales/IWA-Agentic",
+  "mandatorySignals": ["authentication-authorization", "secrets-vault", "previous-incident-area"],
+  "mandatoryInternetApi": true,
+  "requiredLabels": ["faa-required"],
   "application": {
     "tier": "tier-2",
     "internetFacing": true,

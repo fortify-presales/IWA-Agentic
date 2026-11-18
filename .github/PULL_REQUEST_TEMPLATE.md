@@ -35,6 +35,9 @@ For manual review, use `yes` only when a human has reviewed all AI-generated cod
 `no` if that review is incomplete, or `not-applicable` if there is no AI-generated code.
 An AI review or a passing test/scan is not human manual review.
 
+Configured risk criteria can select a PR-only differential FAA scan and import its results
+into the branch's FoD/SSC target. Findings remain report-only, not automatically accepted.
+
 - AI assistance used: <!-- none | low | significant | predominant -->
 - AI tool: <!-- GitHub Copilot | other | none -->
 - AI-generated code manually reviewed: <!-- yes | no | not-applicable -->

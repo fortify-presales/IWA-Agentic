@@ -17,7 +17,7 @@ const neutralPolicy = () => {
   return policy;
 };
 const event = (body = '') => ({
-  repository: { id: 123, full_name: actualPolicy.repository },
+  repository: { id: 123, full_name: 'example/another-repository' },
   pull_request: {
     number: 7, draft: false, body, labels: [],
     base: { sha: 'a'.repeat(40), repo: { id: 123 } },
@@ -86,6 +86,24 @@ test('required label alone is mandatory; unknown and low-risk labels cannot lowe
   assert.equal(result.score, 0);
   assert.equal(result.mandatory, true);
   assert.equal(result.decision, 'faa-mandatory');
+});
+
+test('mandatory overrides and label names are configurable for another repository', () => {
+  const policy = neutralPolicy();
+  policy.mandatorySignals = [];
+  policy.mandatoryInternetApi = false;
+  policy.requiredLabels = ['run-faa'];
+  policy.application.internetFacing = true;
+  policy.scores['authentication-authorization'] = 1;
+  const input = event('- Authentication or authorization changed: yes\n- New or materially changed API: yes');
+  policy.scores['new-api'] = 1;
+  input.pull_request.labels = [{ name: 'faa-required' }];
+  const result = assessPullRequest(input, [], policy);
+  assert.equal(result.repository, 'example/another-repository');
+  assert.equal(result.score, 6);
+  assert.equal(result.mandatory, false);
+  input.pull_request.labels = [{ name: 'run-faa' }];
+  assert.equal(assessPullRequest(input, [], policy).mandatory, true);
 });
 
 test('secrets and incident declarations trigger mandatory; API requires internet exposure for override', () => {
@@ -164,6 +182,8 @@ test('bad policy and missing event metadata fail explicitly', () => {
     (p) => { p.scores['new-api'] = -4; },
     (p) => { delete p.scores['large-change']; },
     (p) => { p.paths['new-api'] = ['[']; },
+    (p) => { p.mandatorySignals = ['unknown-signal']; },
+    (p) => { p.requiredLabels = [null]; },
   ]) {
     const policy = neutralPolicy();
     mutate(policy);
@@ -188,7 +208,7 @@ test('invalid outputs fail and summary escapes untrusted Markdown/newlines', () 
   assert.match(summary, /No FAA scan or FoD import was performed/);
 });
 
-test('Git-backed adapter uses trusted policy, merge-base diff, and emits outputs only on success', async (t) => {
+test('Git-backed adapter uses the selected policy, merge-base diff, and emits outputs only on success', async (t) => {
   const temp = await mkdtemp(join(tmpdir(), 'faa-risk-test-'));
   t.after(() => rm(temp, { recursive: true, force: true }));
   const source = join(temp, 'source');
@@ -223,7 +243,7 @@ test('Git-backed adapter uses trusted policy, merge-base diff, and emits outputs
   await writeFile(eventPath, JSON.stringify(input));
   const outputDir = join(temp, 'out');
   const env = { GITHUB_OUTPUT: join(temp, 'outputs'), GITHUB_STEP_SUMMARY: join(temp, 'summary'),
-    GITHUB_RUN_ID: '99', FAA_PR_SCANS_ENABLED: 'true' };
+    GITHUB_RUN_ID: '99' };
   const result = await runAdapter({ eventPath, sourceDir: source, outputDir, env });
   assert.equal(result.score, 9);
   assert.equal(result.decision, 'faa-mandatory');
@@ -232,12 +252,41 @@ test('Git-backed adapter uses trusted policy, merge-base diff, and emits outputs
   assert.equal(result.policySha256.length, 64);
   assert.ok(result.reasons.some((r) => r.evidence.includes('packages/api/src/services/AuthService.ts')));
   assert.ok(result.assessmentId.endsWith(':99:1'));
-  assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), /score=9\nmandatory=true\ndecision=faa-mandatory\nexecute_faa=true\n/);
+  assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), /score=9\nmandatory=true\ndecision=faa-mandatory\ndo_faa=true\n/);
+  assert.ok((await readFile(env.GITHUB_OUTPUT, 'utf8')).includes(`change_range=${baseSha}..${headSha}\n`));
   assert.equal(JSON.parse(await readFile(join(outputDir, 'faa-risk-result.json'), 'utf8')).repositoryId, 123);
-  await assert.rejects(runAdapter({
-    eventPath, sourceDir: source, outputDir: join(temp, 'bad-controls'),
-    env: { FAA_TRUSTED_CONTROL_SHA: 'd'.repeat(40) },
-  }), /Control checkout/);
+  const customPolicy = neutralPolicy();
+  customPolicy.mandatorySignals = [];
+  customPolicy.thresholds = { recommended: 50, mandatory: 100 };
+  const customPolicyPath = join(temp, 'custom-policy.json');
+  await writeFile(customPolicyPath, JSON.stringify(customPolicy));
+  const customResult = await runAdapter({
+    eventPath, sourceDir: source, outputDir: join(temp, 'custom-policy-output'),
+    policyPath: customPolicyPath, env: {},
+  });
+  assert.equal(customResult.doFaa, false);
+  const customCli = spawnSync(process.execPath, [
+    fileURLToPath(new URL('../scripts/faa-risk-adapter.mjs', import.meta.url)),
+    '--event', eventPath, '--source', source, '--policy', customPolicyPath,
+    '--output', join(temp, 'custom-cli'),
+  ], { encoding: 'utf8' });
+  assert.ifError(customCli.error);
+  assert.equal(customCli.status, 0, customCli.stderr);
+  assert.equal(JSON.parse(await readFile(join(temp, 'custom-cli', 'faa-risk-result.json'), 'utf8')).doFaa, false);
+  input.pull_request.head.repo.id = 456;
+  await writeFile(eventPath, JSON.stringify(input));
+  const fork = await runAdapter({ eventPath, sourceDir: source, outputDir: join(temp, 'fork'), env: {} });
+  assert.equal(fork.doFaa, false);
+  assert.equal(fork.faaExecution.status, 'skipped-fork');
+  input.pull_request.head.repo.id = 123;
+  input.pull_request.base.sha = headSha;
+  input.pull_request.labels = [{ name: 'faa-required' }];
+  await writeFile(eventPath, JSON.stringify(input));
+  const empty = await runAdapter({ eventPath, sourceDir: source, outputDir: join(temp, 'empty'), env: {} });
+  assert.equal(empty.doFaa, false);
+  assert.equal(empty.mandatory, true);
+  assert.equal(empty.faaExecution.status, 'skipped-no-changes');
+  input.pull_request.labels = [];
   input.pull_request.base.sha = 'd'.repeat(40);
   await writeFile(eventPath, JSON.stringify(input));
   await assert.rejects(runAdapter({
@@ -258,4 +307,13 @@ test('Git-backed adapter uses trusted policy, merge-base diff, and emits outputs
   assert.ifError(failure.error);
   assert.equal(failure.status, 1);
   assert.match(failure.stderr, /FAA assessment failed/);
+  await rm(join(source, 'renamed, file.ts'));
+  input.pull_request.base.sha = headSha;
+  input.pull_request.head.sha = commit();
+  input.pull_request.labels = [{ name: 'faa-required' }];
+  await writeFile(eventPath, JSON.stringify(input));
+  const deleted = await runAdapter({ eventPath, sourceDir: source, outputDir: join(temp, 'deleted'), env: {} });
+  assert.equal(deleted.mandatory, true);
+  assert.equal(deleted.doFaa, false);
+  assert.equal(deleted.faaExecution.status, 'skipped-no-changes');
 });
