@@ -1,0 +1,145 @@
+name: FAA PR 26 Pre-merge Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_faa:
+        description: Approve a paid FAA/LLM validation of the pinned PR 26 revision
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: faa-pr26-premerge
+  cancel-in-progress: false
+
+env:
+  FAA_APPROVED_CONTROL_SHA: 82728987091cce52c471938f38af0499931b61ed
+  FAA_PR_SCANS_ENABLED: ${{ vars.FAA_PR_SCANS_ENABLED || 'false' }}
+  FAA_LICENSE_PLATFORM: ${{ vars.FAA_LICENSE_PLATFORM || 'fod' }}
+
+jobs:
+  validate:
+    name: Validate approved controls on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require main, explicit consent and enabled scanning
+        env:
+          FAA_APPROVE_RUN: ${{ inputs.run_faa }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          assert.equal(process.env.GITHUB_EVENT_NAME, 'workflow_dispatch');
+          assert.equal(process.env.GITHUB_REF, 'refs/heads/main', 'Dispatch the reviewed launcher from main only');
+          assert.equal(process.env.GITHUB_REPOSITORY, 'fortify-presales/IWA-Agentic');
+          assert.equal(process.env.FAA_APPROVE_RUN, 'true', 'Explicit run_faa=true approval is required');
+          assert.equal(process.env.FAA_PR_SCANS_ENABLED, 'true', 'Enable FAA_PR_SCANS_ENABLED for this approved demo');
+          assert.match(process.env.FAA_APPROVED_CONTROL_SHA, /^[a-f0-9]{40}$/);
+          NODE
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FAA_APPROVED_CONTROL_SHA }}
+          path: controls
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Test pinned helpers without invoking FAA
+        run: node --test controls/.github/tests/faa-risk-adapter.test.mjs controls/.github/tests/faa-smoke-test.test.mjs controls/.github/tests/faa-pr-scan.test.mjs
+
+  scan:
+    name: Prove PR 26 risk selection and FAA execution
+    needs: validate
+    runs-on: [self-hosted, Linux, X64, fortify, faa]
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Snapshot the exact approved PR from GitHub
+        env:
+          FAA_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          const response = await fetch('https://api.github.com/repos/fortify-presales/IWA-Agentic/pulls/26', {
+            headers: {
+              Authorization: `Bearer ${process.env.FAA_GITHUB_TOKEN}`,
+              Accept: 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+            },
+            signal: AbortSignal.timeout(30_000),
+          });
+          assert.ok(response.ok, `PR snapshot failed: GitHub HTTP ${response.status}`);
+          const pr = await response.json();
+          assert.equal(pr.number, 26);
+          assert.equal(pr.state, 'open');
+          assert.equal(pr.draft, false);
+          assert.equal(pr.base.ref, 'main');
+          assert.equal(pr.base.repo.full_name, process.env.GITHUB_REPOSITORY);
+          assert.equal(pr.head.repo?.id, pr.base.repo.id, 'Forks cannot select this validation');
+          assert.equal(pr.head.sha, process.env.FAA_APPROVED_CONTROL_SHA, 'PR 26 changed; review and repin before scanning');
+          const eventPath = join(process.env.RUNNER_TEMP, `faa-pr26-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`);
+          await writeFile(eventPath, JSON.stringify({ repository: pr.base.repo, pull_request: pr }));
+          console.log(`PR 26 snapshot: base ${pr.base.sha}, approved head ${pr.head.sha}`);
+          NODE
+      - name: Check out approved immutable controls
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FAA_APPROVED_CONTROL_SHA }}
+          path: controls
+          persist-credentials: false
+      - name: Check out exact PR head as separate scan data
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FAA_APPROVED_CONTROL_SHA }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - name: Run pinned risk selection and mandatory FAA scan
+        id: faa
+        env:
+          FAA_TRUSTED_CONTROL_SHA: ${{ env.FAA_APPROVED_CONTROL_SHA }}
+          FAA_GITHUB_TOKEN: ${{ github.token }}
+          FAA_OUTPUT_DIR: ${{ runner.temp }}/faa-bootstrap-pr26-${{ github.run_id }}-${{ github.run_attempt }}
+          FCLI_DEFAULT_FOD_URL: ${{ env.FAA_LICENSE_PLATFORM == 'fod' && vars.FOD_URL || '' }}
+          FCLI_DEFAULT_FOD_CLIENT_ID: ${{ env.FAA_LICENSE_PLATFORM == 'fod' && secrets.FOD_CLIENT_ID || '' }}
+          FCLI_DEFAULT_FOD_CLIENT_SECRET: ${{ env.FAA_LICENSE_PLATFORM == 'fod' && secrets.FOD_CLIENT_SECRET || '' }}
+          FCLI_DEFAULT_SSC_URL: ${{ env.FAA_LICENSE_PLATFORM == 'ssc' && vars.SSC_URL || '' }}
+          FCLI_DEFAULT_SSC_TOKEN: ${{ env.FAA_LICENSE_PLATFORM == 'ssc' && secrets.SSC_TOKEN || '' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          import { runPrScan } from './controls/.github/scripts/faa-pr-scan.mjs';
+          const eventPath = join(process.env.RUNNER_TEMP, `faa-pr26-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.json`);
+          const record = await runPrScan({
+            controlDir: join(process.env.GITHUB_WORKSPACE, 'controls'),
+            sourceDir: join(process.env.GITHUB_WORKSPACE, 'source'),
+            outputDir: process.env.FAA_OUTPUT_DIR,
+            event: JSON.parse(await readFile(eventPath, 'utf8')),
+            approvedControlSha: process.env.FAA_APPROVED_CONTROL_SHA,
+          });
+          if (record.status !== 'succeeded') {
+            throw new Error(`Pre-merge execution proof incomplete: ${record.status}; inspect the retained evidence`);
+          }
+          NODE
+      - name: Retain risk, scan and execution evidence
+        if: always() && steps.faa.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: faa-bootstrap-pr26-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/faa-bootstrap-pr26-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 14
