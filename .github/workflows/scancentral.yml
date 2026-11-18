@@ -17,14 +17,29 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [ "main" ]
-    paths-ignore:
-      - '.github/**'
-      - '!.github/workflows/scancentral.yml'
+    # Full application scans are unnecessary for documentation or unrelated CI changes.
+    paths:
+      - 'packages/**'
+      - '!packages/**/*.md'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+      - '.npmrc'
+      - 'debricked-config.yaml'
+      - '.github/workflows/scancentral.yml'
+      - '.github/custom-actions/ssc/**'
   push:
     branches: [ "main", "demo/fortify-remediate-ssc" ]
-    paths-ignore:
-      - '.github/**'
-      - '!.github/workflows/scancentral.yml'
+    paths:
+      - 'packages/**'
+      - '!packages/**/*.md'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+      - '.npmrc'
+      - 'debricked-config.yaml'
+      - '.github/workflows/scancentral.yml'
+      - '.github/custom-actions/ssc/**'
 
 jobs:
   Fortify-AST-Scan:
@@ -60,6 +75,8 @@ jobs:
           npm run build
         env:
           NEXUS_REPO_AUTH: ${{ secrets.NEXUS_REPO_AUTH }}
+      - name: Remove dependency Composer manifests
+        run: find ./node_modules ./packages -type f -path '*/node_modules/*/composer.json' -print -delete
       # Perform FortifyScanCentral SAST/SCA/DAST scan and import results into GitHub code scanning alerts
       - name: Run ScanCentral Scan
         uses: fortify/github-action@v3
@@ -73,12 +90,13 @@ jobs:
           SETUP_EXTRA_OPTS: ${{ format('--issue-template {0}', vars.SSC_DEFAULT_ISSUE_TEMPLATE) }}
           PACKAGE_EXTRA_OPTS: >-
             -bt none
+            -skipBuild
             -exclude "DEMO.md"
             -exclude "SECURITY.md"
             -exclude "README.md"
             -exclude "**/tests/**/*"
-            -exclude "**/build/**/*"
-            -exclude "**/dist/**/*"
+            -exclude "build/**/*"
+            -exclude "dist/**/*"
             -exclude "**/node_modules/**/package-lock.json"
             -exclude "**/node_modules/**/yarn.lock"
             -exclude "data"
@@ -102,5 +120,5 @@ jobs:
           DO_PR_COMMENT: true
           DO_EXPORT: true
           # Use an absolute path (relative paths are resolved against fcli's cwd, not GITHUB_WORKSPACE)
-          CHECK_POLICY_ACTION: ${{ github.workspace }}/.github/custom-actions/ssc-check-policy.yaml
+          CHECK_POLICY_ACTION: ${{ github.workspace }}/.github/custom-actions/ssc/check-policy.yaml
           CHECK_POLICY_EXTRA_OPTS: --on-unsigned=ignore

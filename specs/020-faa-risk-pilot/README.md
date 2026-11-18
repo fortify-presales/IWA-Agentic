@@ -10,6 +10,18 @@ A separate manual-only [differential smoke test](../../.github/workflows/faa-smo
 FAA 26.4.0 against changes on `main` or the explicitly approved `feature/020-faa-risk-pilot`
 branch. It has no FoD integration.
 
+### Full application scan triggers
+
+The FoD and ScanCentral workflows use positive path filters for package files (excluding Markdown),
+root npm manifests/lockfile, TypeScript build configuration, npm configuration, and each scanner's
+workflow and custom actions. ScanCentral also includes its Debricked configuration. Documentation,
+specifications, PR templates, agent instructions and unrelated workflows alone do not trigger those
+full scans. Manual dispatch and existing branch restrictions remain unchanged; FAA assessment and
+smoke-test triggers are independent. PR filters consider the whole PR diff, not only its latest
+commit. If full scans become required checks, account for skipped workflows leaving checks pending.
+Each workflow's `CHECK_POLICY_ACTION` references its platform-specific policy file:
+`.github/custom-actions/fod/check-policy.yaml` or `.github/custom-actions/ssc/check-policy.yaml`.
+
 ## Prerequisites and validation
 
 Node.js 20+ and Git are sufficient. No npm install, fcli, FAA, credentials, or application build

@@ -24,11 +24,26 @@
 
 <!-- Replace each comment with one listed value. Declarations add context; they cannot lower automated risk. -->
 
+**Before submitting:** Replace every answer placeholder in this section and Security impact
+with exactly one listed value. Keep the field labels unchanged. Do not leave an HTML comment
+as an answer. Missing answers are recorded as unknown by the audit-only risk assessment;
+they are not treated as "no", and this template does not enforce completion.
+
+For assistance level, use `none` for no AI assistance, `low` for minor suggestions,
+`significant` for substantial assistance, or `predominant` when AI produced most of the change.
+For manual review, use `yes` only when a human has reviewed all AI-generated code in this PR,
+`no` if that review is incomplete, or `not-applicable` if there is no AI-generated code.
+An AI review or a passing test/scan is not human manual review.
+
 - AI assistance used: <!-- none | low | significant | predominant -->
 - AI tool: <!-- GitHub Copilot | other | none -->
 - AI-generated code manually reviewed: <!-- yes | no | not-applicable -->
 
 ## Security impact
+
+Answer for the entire PR, including CI workflows, scripts, credentials and trust boundaries,
+not only application code. If unsure, investigate or ask the author/reviewer rather than
+defaulting to `no`. Automated path evidence can override a negative declaration.
 
 - Security-sensitive code generated or modified: <!-- yes | no -->
 - Authentication or authorization changed: <!-- yes | no -->
