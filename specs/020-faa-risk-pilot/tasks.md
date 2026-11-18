@@ -35,7 +35,8 @@
 - `git --no-pager diff --check` — passed.
 - `node node_modules\eslint\bin\eslint.js .github\scripts\faa-risk-adapter.mjs .github\tests\faa-risk-adapter.test.mjs`
   — unavailable: repository dependencies are not installed. No dependency restoration was performed.
-- The assessment workflow's Node 20 Windows/Linux/macOS matrix remains unverified until rollout.
+- The assessment workflow now tests Node 20 on Ubuntu only; live rollout is tracked in
+  [feature 021](../021-faa-pr-execution/tasks.md).
 - Static change review: JSON is data-only; subprocesses use argument arrays and validated SHAs;
   PR paths are evidence, not filesystem destinations; no PR code execution or new credential access.
 
@@ -109,7 +110,7 @@ Downloaded artifacts were checked: SARIF 2.1.0, one run, tool `FORTIFY_AA 26.4.0
 and nonempty FAA Markdown summary. Logs confirmed plan/analysis/validation model stages.
 No FoD import, full/incremental fallback, application build or full-pilot merge occurred.
 T013/T020 are complete for the FoD path; live SSC verification and the assessment workflow's
-post-merge matrix remain separate.
+post-merge workflow verification remain separate.
 
 ## Dependencies
 

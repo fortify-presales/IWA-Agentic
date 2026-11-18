@@ -46,11 +46,15 @@ T007-T009 follow implementation. T010 requires merged controls and explicit acti
   - passed with checksum-verified actionlint 1.7.7. Shellcheck/Pyflakes were disabled.
 - `git --no-pager diff --check`
   - passed.
+- Ubuntu-only follow-up: YAML assertions passed for `ubuntu-latest`, no matrix, identical test
+  steps and unchanged assessment/scan behavior.
+- `actionlint.exe -config-file .github\actionlint.yaml -shellcheck= -pyflakes= .github\workflows\faa-risk-assessment.yml`
+  - passed after removing the OS matrix. Tests were not rerun for this scheduling-only change.
 - Static change review covered workflow selection/authorization, parameterized subprocesses and
   untrusted PR data, plus the FAA agent boundary. No new high-confidence code findings identified.
   External FAA tool/prompt/spend policy and runner isolation were not independently verified.
   Main protection and the legacy manual smoke workflow's Critical finding remain separate risks.
 
-The workflow's Node 20 Linux/Windows/macOS matrix, real PR API checks and paid FAA execution
+The workflow's Node 20 Ubuntu job, real PR API checks and paid FAA execution
 remain unverified on GitHub until T010. No repository variable, protection or secret was changed,
 and no paid scan was launched for this implementation.

@@ -123,6 +123,7 @@ silently reassessed as a newer PR revision. Use a new PR update/label event to r
 The [implementation specification](../021-faa-pr-execution/spec.md) extends the existing
 [risk workflow](../../.github/workflows/faa-risk-assessment.yml); it does not use a privileged
 `workflow_run` or trust an artifact supplied by a PR.
+Hosted helper tests run on `ubuntu-latest` only; no OS matrix is required for this Linux pilot.
 
 ### Activation and first live verification
 
