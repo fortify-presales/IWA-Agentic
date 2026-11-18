@@ -64,6 +64,10 @@ syntax in paths remain data. Invalid UTF-8 filenames fail explicitly.
 - **FR-011**: Select FoD or SSC licensing through `FAA_LICENSE_PLATFORM` (default `fod`).
   Map existing Actions settings to the selected backend's `FCLI_DEFAULT_*` environment names,
   require its URL/credentials before invoking FAA, and keep credentials out of arguments/evidence.
+- **FR-012**: For PR 25, a hosted pre-merge validation MUST exercise controlled risk scenarios and
+  assess the exact current PR head/base using the branch controls, without Fortify credentials.
+  An explicitly selected pilot scan MUST restrict FAA to changed allowlisted pilot files and the
+  approved feature branch; the normal package target remains the default.
 
 ## Out of Scope
 

@@ -13,6 +13,7 @@ async function fixture(t) {
   const sourceDir = join(temp, 'source');
   const outputDir = join(temp, 'output');
   await mkdir(join(sourceDir, 'packages'), { recursive: true });
+  await mkdir(join(sourceDir, '.github', 'scripts'), { recursive: true });
   const git = (...args) => execFileSync('git', ['-C', sourceDir, '-c', 'core.autocrlf=false', ...args], { encoding: 'utf8' }).trim();
   const commit = () => {
     git('add', '--all');
@@ -23,8 +24,10 @@ async function fixture(t) {
   };
   git('init', '--template=');
   await writeFile(join(sourceDir, 'packages', 'sample.ts'), 'export const value = 1;\n');
+  await writeFile(join(sourceDir, '.github', 'scripts', 'faa-risk-adapter.mjs'), 'export const score = 1;\n');
   const baseSha = commit();
   await writeFile(join(sourceDir, 'packages', 'sample.ts'), 'export const value = 2;\n');
+  await writeFile(join(sourceDir, '.github', 'scripts', 'faa-risk-adapter.mjs'), 'export const score = 2;\n');
   const headSha = commit();
   const env = {
     GITHUB_REPOSITORY: 'fortify-presales/IWA-Agentic', GITHUB_REPOSITORY_ID: '1345239625',
@@ -85,6 +88,39 @@ test('approved pilot branch scans the exact dispatched head and records its ref'
   assert.equal(f.calls.filter((args) => args[0] === '-scan').length, 1);
   const saved = JSON.parse(await readFile(join(f.outputDir, 'faa-execution.json'), 'utf8'));
   assert.equal(saved.ref, f.env.GITHUB_REF);
+});
+
+test('pilot target scans only changed allowlisted files on the approved branch', async (t) => {
+  const f = await fixture(t);
+  f.env.GITHUB_REF = 'refs/heads/feature/020-faa-risk-pilot';
+  f.env.FAA_SCAN_TARGET = 'pilot';
+  const record = await runSmokeTest(f);
+  assert.equal(record.scope, '.github/scripts/faa-risk-adapter.mjs');
+  const scan = f.calls.find((args) => args[0] === '-scan');
+  assert.equal(scan[scan.indexOf('--scope') + 1], record.scope);
+  assert.equal(record.changedFileCount, 1);
+});
+
+test('pilot target rejects other refs, invalid targets, and dirty pilot files before FAA', async (t) => {
+  const f = await fixture(t);
+  await assert.rejects(runSmokeTest({ ...f, env: { ...f.env, FAA_SCAN_TARGET: 'pilot' } }), /restricted/);
+  await assert.rejects(runSmokeTest({ ...f, env: { ...f.env, FAA_SCAN_TARGET: 'all' } }), /FAA_SCAN_TARGET/);
+  f.env.GITHUB_REF = 'refs/heads/feature/020-faa-risk-pilot';
+  f.env.FAA_SCAN_TARGET = 'pilot';
+  await writeFile(join(f.sourceDir, '.github', 'scripts', 'faa-risk-adapter.mjs'), 'dirty\n');
+  await assert.rejects(runSmokeTest(f), /Pilot checkout must be clean/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('pilot target rejects a range with no changed allowlisted files', async (t) => {
+  const f = await fixture(t);
+  await writeFile(join(f.sourceDir, 'README.md'), 'Documentation only\n');
+  const docsHead = f.commit();
+  await assert.rejects(runSmokeTest({
+    ...f, env: { ...f.env, GITHUB_REF: 'refs/heads/feature/020-faa-risk-pilot',
+      GITHUB_SHA: docsHead, FAA_SCAN_TARGET: 'pilot' },
+  }), /No scannable pilot changes/);
+  assert.equal(f.calls.length, 0);
 });
 
 for (const platform of ['fod', 'ssc']) {

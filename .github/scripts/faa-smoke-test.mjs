@@ -3,6 +3,14 @@ import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const pilotPaths = [
+  '.github/scripts/faa-risk-adapter.mjs',
+  '.github/scripts/faa-smoke-test.mjs',
+  '.github/scripts/faa-premerge-validation.mjs',
+  '.github/workflows/faa-risk-assessment.yml',
+  '.github/workflows/faa-smoke-test.yml',
+];
+
 function requireValue(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -10,7 +18,7 @@ function requireValue(condition, message) {
 export async function runSmokeTest({ sourceDir, outputDir, env = process.env, execute = execFileSync }) {
   const started = Date.now();
   const record = {
-    mode: 'differential', scope: 'packages', status: 'failed',
+    mode: 'differential', status: 'failed',
     repository: env.GITHUB_REPOSITORY, ref: env.GITHUB_REF,
     runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
     startedAt: new Date(started).toISOString(), analyzerInvoked: false, analyzerExitCode: null,
@@ -25,6 +33,11 @@ export async function runSmokeTest({ sourceDir, outputDir, env = process.env, ex
       && ['refs/heads/main', 'refs/heads/feature/020-faa-risk-pilot'].includes(env.GITHUB_REF),
     'Only main or feature/020-faa-risk-pilot dispatches in fortify-presales/IWA-Agentic are allowed');
     requireValue(/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? ''), 'Invalid dispatched commit SHA');
+    const target = env.FAA_SCAN_TARGET || 'packages';
+    requireValue(['packages', 'pilot'].includes(target), 'FAA_SCAN_TARGET must be packages or pilot');
+    requireValue(target !== 'pilot' || env.GITHUB_REF === 'refs/heads/feature/020-faa-risk-pilot',
+      'Pilot validation is restricted to the approved feature branch');
+    record.target = target;
     const licensePlatform = env.FAA_LICENSE_PLATFORM;
     requireValue(['fod', 'ssc'].includes(licensePlatform), 'FAA_LICENSE_PLATFORM must be fod or ssc');
     record.licensePlatform = licensePlatform;
@@ -51,15 +64,20 @@ export async function runSmokeTest({ sourceDir, outputDir, env = process.env, ex
     const baseSha = baseInput.toLowerCase();
     requireValue(baseSha !== headSha, 'Base and head must differ');
     git('merge-base', '--is-ancestor', baseSha, headSha);
-    requireValue(git('status', '--porcelain', '--untracked-files=normal', '--', 'packages').trim() === '',
-      'Package checkout must be clean before FAA runs');
+    const paths = target === 'pilot' ? pilotPaths : ['packages'];
+    requireValue(git('status', '--porcelain', '--untracked-files=normal', '--', ...paths).trim() === '',
+      `${target === 'packages' ? 'Package' : 'Pilot'} checkout must be clean before FAA runs`);
     const range = `${baseSha}..${headSha}`;
     const changed = git('-c', 'core.quotepath=false', 'diff', '--no-ext-diff', '--no-textconv',
-      '--name-only', '-z', '--diff-filter=ACMRT', range, '--', 'packages');
-    requireValue(changed.length > 0, 'No scannable package changes in this range; choose an earlier base SHA');
+      '--name-only', '-z', '--diff-filter=ACMRT', range, '--', ...paths);
+    requireValue(changed.length > 0, `No scannable ${target === 'packages' ? 'package' : 'pilot'} changes in this range; choose an earlier base SHA`);
+    const changedPaths = changed.split('\0').filter(Boolean);
+    requireValue(target !== 'pilot' || changedPaths.every((path) => pilotPaths.includes(path)),
+      'Unexpected pilot scan path');
+    const scope = target === 'pilot' ? changedPaths.join(',') : 'packages';
     Object.assign(record, {
-      baseSha, headSha, range,
-      changedFileCount: changed.split('\0').filter(Boolean).length,
+      baseSha, headSha, range, scope,
+      changedFileCount: changedPaths.length,
       buildId: `github-${env.GITHUB_REPOSITORY_ID}-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`,
     });
     const help = execute('fortifyaa', ['-help'], {
@@ -69,7 +87,7 @@ export async function runSmokeTest({ sourceDir, outputDir, env = process.env, ex
     record.analyzerVersion = '26.4.0';
     record.analyzerInvoked = true;
     execute('fortifyaa', [
-      '-scan', sourceDir, '--scope', 'packages', '--differential', range,
+      '-scan', sourceDir, '--scope', scope, '--differential', range,
       '--output', join(outputDir, 'faa.sarif'), '--output-format', 'sarif,md-summary',
       '--output-md-summary', join(outputDir, 'faa-summary.md'), '--message-format', 'plain',
       '-b', record.buildId,

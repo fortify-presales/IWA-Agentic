@@ -74,6 +74,9 @@
   selected backend to `FCLI_DEFAULT_*` with configuration checks and fake-executor tests.
 - [x] T022 Map the existing `OPENAI_API_KEY` Actions secret into the FAA step only, forwarding
   it through the child environment without exposing it in arguments or execution evidence.
+- [ ] T023 Verify PR 25's actual scoring and controlled scenarios in a GitHub-hosted job, and
+  run an approved differential FAA scan of its changed allowlisted pilot files. Inspect the
+  findings and FAA's actual file coverage before merging.
 
 ### Initial remote attempt
 

@@ -193,10 +193,29 @@ The full workflow permits only `main` and the named pilot branch in `fortify-pre
 other branches, tags, PR refs and forks are rejected. After merging the pilot, a dispatch from
 `main` runs the full workflow; a blank `base_sha` uses the dispatched commit's first parent.
 
-The only scan mode is:
+### Pre-merge validation of PR 25
+
+Select `scan_target=pilot` and supply PR 25's exact current base SHA. Only the approved feature
+branch may use this target. The hosted job checks the current PR head/base, runs the normal smoke
+tests, validates four controlled scoring scenarios, and assesses the actual PR using the branch's
+under-review controls. It retains `faa-premerge-risk-...` evidence. This does **not** exercise
+the future `pull_request_target` trust boundary; test that separately after merge.
+
+After hosted validation succeeds, FAA scans only added/modified/copied/renamed/type-changed
+allowlisted pilot scripts and workflows in the base-to-head diff. It records the actual scope and
+changed-file count. YAML is included as a candidate, but presence in the `--scope` argument is not
+proof that FAA analyzed it; inspect FAA's own logs and outputs. No arbitrary scope is accepted.
+Dispatch only reviewed code with an approved runner policy and spend limit.
+
+```powershell
+gh workflow run faa-smoke-test.yml --repo fortify-presales/IWA-Agentic --ref feature/020-faa-risk-pilot -f scan_target=pilot -f base_sha=<PR-base-sha>
+```
+
+The default `scan_target=packages` retains the existing package smoke-test behavior. The scan mode
+remains differential only:
 
 ```text
-fortifyaa -scan <checkout> --scope packages --differential <base-sha>..<dispatched-sha>
+fortifyaa -scan <checkout> --scope <packages-or-allowlisted-changed-pilot-files> --differential <base-sha>..<dispatched-sha>
   --output <artifacts>/faa.sarif --output-format sarif,md-summary
   --output-md-summary <artifacts>/faa-summary.md --message-format plain
   -b github-<repository-id>-<run-id>-<attempt>
@@ -204,7 +223,7 @@ fortifyaa -scan <checkout> --scope packages --differential <base-sha>..<dispatch
 
 `--differential` reports issues introduced on changed lines. There is no full-scan fallback,
 `--incremental`, required baseline, complementary FoD/SSC input, or baseline update. The helper
-checks the exact HEAD, base ancestry, clean package checkout, and FAA version before scanning.
+checks the exact HEAD, base ancestry, clean selected paths, and FAA version before scanning.
 No application build or application startup is run by the workflow.
 
 Each attempt has a unique build ID so a persistent runner cannot automatically resume another
