@@ -4,8 +4,10 @@
 
 One dependency-free Node.js ES module assesses PR risk, writes JSON audit evidence and a Markdown
 summary, and publishes GitHub outputs. The workflow evaluates non-draft PRs into `main` on
-creation, updates, body edits, readiness, and label changes. The assessment workflow never runs FAA,
-imports FoD results, or enforces production policy. Existing SAST/SCA workflows remain independent.
+creation, updates, body edits, readiness, and label changes. When explicitly enabled, a separate
+job runs FAA only for mandatory, same-repository PR decisions using immutable base controls.
+Recommended decisions remain advisory. No results are imported into FoD/SSC and no production
+policy is enforced. Existing SAST/SCA workflows remain independent.
 A separate manual-only [differential smoke test](../../.github/workflows/faa-smoke-test.yml) can run
 FAA 26.4.0 against changes on `main` or the explicitly approved `feature/020-faa-risk-pilot`
 branch. It has no FoD integration.
@@ -30,7 +32,7 @@ is needed for assessment.
 From the repository root:
 
 ```powershell
-node --test .github\tests\faa-risk-adapter.test.mjs
+node --test .github\tests\faa-risk-adapter.test.mjs .github\tests\faa-smoke-test.test.mjs .github\tests\faa-pr-scan.test.mjs
 git --no-pager diff --check
 ```
 
@@ -45,6 +47,8 @@ node .github\scripts\faa-risk-adapter.mjs --event C:\temp\pr-event.json --source
 The policy path is fixed relative to the executed module, not selectable by the PR event.
 Required event fields are `repository.id`, `repository.full_name`, and
 `pull_request.{number,draft,body,labels,base.sha,base.repo.id,head.sha}`.
+Execution selection additionally requires `head.repo.id`; missing or different identity is treated
+as a fork and never credential-scanned. Automatic scans require `base.ref=main`.
 The repository name must match the policy, and `base.repo.id` must match `repository.id`.
 Drafts fail local invocation explicitly; automatic assessment skips drafts.
 
@@ -54,7 +58,7 @@ Outputs:
   reasons/evidence, static metadata provenance, declaration issues/conflicts, unevaluated signals,
   and explicit FAA execution status.
 - `faa-risk-summary.md`: bounded summary with full evidence retained in JSON.
-- `GITHUB_OUTPUT`: `score`, `mandatory`, `decision`, only after successful assessment.
+- `GITHUB_OUTPUT`: `score`, `mandatory`, `decision`, `execute_faa`, only after successful assessment.
 
 The recorded control SHA is the actual checkout containing the executing module. Local uncommitted
 changes are not proof of a protected revision; CI additionally verifies that control SHA equals the
@@ -63,9 +67,12 @@ event's base SHA. The policy hash identifies the exact policy bytes.
 ## Trust and activation
 
 The `pull_request_target` workflow executes only controls from the base SHA. A separate, credential-free
-head checkout is data for Git; it is never imported, built, installed, or executed. Git external diffs
-and text conversion are disabled. The workflow has only `contents: read`, no Fortify secrets, no PR
-write permission, and does not publish to GitHub code scanning.
+head checkout is data for Git and FAA; the workflow never imports, builds, installs, or executes its
+scripts. Git external diffs and text conversion are disabled. Hosted assessment has only
+`contents: read` and no Fortify secrets. The selected self-hosted job additionally has
+`pull-requests: read` for freshness checks, with Fortify/OpenAI credentials limited to its execution
+step. The helper removes its GitHub API token before starting FAA. No job has PR write permission
+or publishes to GitHub code scanning.
 
 Merge the tooling through normal review before evaluating later PRs: PR changes to workflow/scorer/
 policy intentionally cannot assess themselves with modified controls. Manual dispatch of the
@@ -107,8 +114,94 @@ Leave PR template labels intact and replace HTML comments with an allowed value.
 unrecognized answers remain `unknown` and appear in audit evidence; they are not verified `no`
 answers. Duplicate declarations fail. Automated paths override `no`. A sensitive-data-processing
 declaration is recorded but does not infer a trusted classification. Removing a label does not
-override path/declaration evidence. Event labels/body are a snapshot; rerunning an old event does
-not fetch current GitHub metadata, so use a new PR update/label event to reassess current state.
+override path/declaration evidence. Assessment labels/body remain an event snapshot. The selected
+execution job checks current GitHub PR metadata before and after scanning; stale events are not
+silently reassessed as a newer PR revision. Use a new PR update/label event to reassess current state.
+
+## Conditional mandatory PR scans
+
+The [implementation specification](../021-faa-pr-execution/spec.md) extends the existing
+[risk workflow](../../.github/workflows/faa-risk-assessment.yml); it does not use a privileged
+`workflow_run` or trust an artifact supplied by a PR.
+
+### Activation and first live verification
+
+1. Review and merge the new controls first. This introducing PR cannot exercise its own changed
+   `pull_request_target` controls; its base still contains the previous implementation.
+2. Confirm the existing FAA runner, selected licensing backend and LLM settings described below.
+   The workflow uses `[self-hosted, Linux, X64, fortify, faa]` and Node 20. FAA **26.4.0** must
+   already be installed/configured for that runner account; no app install or build is needed.
+3. Explicitly enable the repository variable `FAA_PR_SCANS_ENABLED` with the exact value `true`.
+   Leave it unset or set it to `false` to retain assessment-only behavior:
+
+   ```powershell
+   gh variable set FAA_PR_SCANS_ENABLED --repo fortify-presales/IWA-Agentic --body true
+   ```
+
+4. On a subsequent reviewed, same-repository, non-draft PR into `main` with scannable changes,
+   complete the PR declarations and add `faa-required` if a deterministic mandatory case is needed.
+   This is a paid FAA execution; obtain the demo owner's approval before triggering it.
+5. Verify the hosted assessment and self-hosted job. In the retained `faa-pr-...` artifact, require
+   `faa-pr-execution.json` to record the exact expected `baseSha`, `headSha`, `controlSha`,
+   `diffBaseSha`, assessment/run/attempt/build identity, `analyzerInvoked: true`,
+   `analyzerExitCode: 0`, and `status: succeeded`. Require valid `faa.sarif` and a nonempty
+   `faa-summary.md`. Inspect FAA's actual file coverage; candidate scope is not proof of coverage.
+6. Verify real advisory/low-risk and disabled skip cases separately. Local tests use fake FAA
+   executors, not live service/model access. Disable the variable again when the demo ends:
+
+   ```powershell
+   gh variable set FAA_PR_SCANS_ENABLED --repo fortify-presales/IWA-Agentic --body false
+   ```
+
+Selection evidence is in `faa-risk-result.json`:
+
+| Selection status | Meaning |
+|------------------|---------|
+| `not-selected` | Below recommendation |
+| `advisory-only` | Recommended, never automatically scanned |
+| `skipped-fork` | Mandatory but not same-repository; no credential scan |
+| `disabled` | Mandatory but opt-in is absent |
+| `pending-execution` | Mandatory and eligible; this is not evidence that FAA ran |
+
+### Execution boundary and evidence
+
+The scan helper is loaded only from `controls/` at the event's full base SHA. `source/` is checked
+out at the assessed full head SHA with credentials not persisted, submodules disabled and no
+installation/build. The helper verifies distinct non-nested checkouts, clean controls/source,
+rejects tracked symlinks/submodules, and recomputes risk using the base policy. A fork cannot
+select scanning. The analyzer uses the trusted controls as its working directory and the absolute
+source root as both scan input and scope, so tooling-only PR changes are eligible too.
+
+The differential range is `merge-base(base,head)..head`, including when the base has advanced on a
+diverged branch. Deleted-only/no-scannable ranges record `skipped-no-changes` without invoking FAA.
+Each attempt has a unique `github-pr-<repository-id>-<run-id>-<attempt>` build ID.
+No full-scan fallback, FoD/SSC import, baseline update or release gating is introduced.
+
+Current GitHub metadata must match repository identity, PR number, open/non-draft state,
+`main` target, base/head SHAs and body/labels. A mismatch before scanning records `skipped-stale`.
+A mismatch after scanning records `stale`, not `succeeded`. Source changes during analysis,
+GitHub API errors, analyzer errors and malformed/missing outputs fail explicitly. Nonzero findings
+do not fail an otherwise completed audit scan. Read the execution record, not just a green job:
+explicit skips/stale outcomes can complete without an error exit.
+
+The execution record and `faa-pr-execution-summary.md` include status, SHAs, assessment identity,
+duration, analyzer invocation/exit and finding count when available. Evidence is retained for
+14 days; available outputs are uploaded on ordinary helper/analyzer failure. Concurrency cancels older PR runs.
+Cancellation, timeout or runner loss can prevent final evidence; no such run attests a newer head.
+Disabling the variable does not terminate an already-running analyzer; cancel that run separately.
+
+### Demo limitations
+
+The owner approved the existing self-hosted demo runner without adding environment/branch
+protections. `main` was unprotected at implementation time: immutable revision selection is not
+independent control-owner authorization. This workflow does not sandbox FAA or the LLM's tools.
+PR contents and instructions are untrusted; trusted external FAA policy must constrain tools,
+network access, prompts, model limits and spend. A timeout is not a spending limit.
+
+The legacy manual smoke workflow still permits mutable `feature/020-faa-risk-pilot` controls.
+Its previously reported Critical Build Script Injection is **not resolved or automatically accepted**
+by adding this separate PR path. Keep its explicit owner disposition/follow-up independent.
+Do not treat these demo controls as production runner isolation or a security approval.
 
 ## Manual FAA differential smoke test
 
@@ -162,7 +255,7 @@ Other providers require their own approved configuration or a credential store i
 `fortifyaa -pilogin` under the runner service account. This workflow does not select a different
 provider or perform an interactive login if credentials are unavailable.
 
-### Test the feature branch before merging the pilot
+### Historical: test the feature branch before merging the pilot
 
 GitHub requires a `workflow_dispatch` workflow to exist on the default branch before it can be
 dispatched on another ref. Register the dispatcher without merging the full pilot:
@@ -279,24 +372,23 @@ The repository selector is explicitly `FAA_LICENSE_PLATFORM=fod`. SSC licensing 
 fake-executor tests, not a live SSC run. This narrow differential result is not a full application
 security assessment and does not imply the application's existing intentional vulnerabilities
 are absent. Subsequent documentation-only evidence commits do not change the scanned tooling
-or application code. Only the dispatcher bootstrap was merged; the complete pilot remains on
-the feature branch for review.
+or application code. At that run's date, only the dispatcher bootstrap was merged. The complete
+pilot subsequently merged through [PR 25](https://github.com/fortify-presales/IWA-Agentic/pull/25).
 
-## Deferred FoD and conditional execution milestones
+## Deferred FoD and other milestones
 
-The manual smoke test is independent of risk scoring. Selected assessment decisions still use the
-existing `pending-runner-setup` placeholder; this does not assert runner readiness or execution.
-Low-risk decisions report `not-selected`. Manual runs do not satisfy or update PR assessments.
+The manual smoke test remains independent of risk scoring and does not update PR assessments.
+Conditional mandatory execution is described above; a pending selection is not execution evidence.
 
 After verifying a real smoke run, separately confirm source/import release IDs and approved
 non-interactive FoD authentication before implementing import into a dedicated release.
-Conditional exact-head-SHA PR execution, live Fortify metadata, baseline credit, suppression
+Live Fortify metadata, baseline credit, suppression
 detection, release gates, exceptions, PR comments, and effectiveness dashboards remain out of scope.
 
 ### Smoke-test helper validation
 
 ```powershell
-node --test .github\tests\faa-smoke-test.test.mjs .github\tests\faa-risk-adapter.test.mjs
+node --test .github\tests\faa-smoke-test.test.mjs .github\tests\faa-risk-adapter.test.mjs .github\tests\faa-pr-scan.test.mjs
 node --check .github\scripts\faa-smoke-test.mjs
 ```
 

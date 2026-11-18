@@ -46,7 +46,8 @@
 - [x] T013 Verify a real remote smoke run, including provider/service/license access and artifact output.
 - [ ] T014 Confirm control owners, add CODEOWNERS, and optionally add a single updated PR comment.
 - [ ] T015 Separately confirm FoD IDs/authentication and implement dedicated-release import.
-- [ ] T016 Separately design isolated, conditional exact-head-SHA execution for selected assessments.
+- [x] T016 Separately design isolated, conditional exact-head-SHA execution for selected assessments;
+  implementation and live rollout tracked in [feature 021](../021-faa-pr-execution/tasks.md).
 
 ### Smoke-test validation
 
