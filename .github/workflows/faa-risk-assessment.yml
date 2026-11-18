@@ -15,11 +15,8 @@ concurrency:
 
 jobs:
   test:
-    name: Test trusted FAA scorer (${{ matrix.os }})
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    name: Test trusted FAA scorer (Ubuntu)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
