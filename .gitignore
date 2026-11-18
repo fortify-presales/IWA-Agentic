@@ -33,6 +33,7 @@ fortifypackage.zip
 *.sarif
 *.json
 !fortify/*.json
+!.github/faa-policy.json
 core_*.xml
 extended_*.xml
 xxe.xml

@@ -1,0 +1,71 @@
+name: FAA Risk Assessment (Audit)
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited, ready_for_review, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: faa-risk-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test trusted FAA scorer (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node --test .github/tests/faa-risk-adapter.test.mjs
+
+  assess:
+    name: Assess PR risk (not an FAA scan)
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.draft == false
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      score: ${{ steps.risk.outputs.score }}
+      mandatory: ${{ steps.risk.outputs.mandatory }}
+      decision: ${{ steps.risk.outputs.decision }}
+    steps:
+      - name: Check out trusted base controls
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: controls
+          persist-credentials: false
+      - name: Check out PR source as data only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Assess using trusted Node module and policy
+        id: risk
+        env:
+          FAA_TRUSTED_CONTROL_SHA: ${{ github.event.pull_request.base.sha }}
+          FAA_OUTPUT_DIR: ${{ runner.temp }}/faa-risk
+        run: node controls/.github/scripts/faa-risk-adapter.mjs --source source --output "$FAA_OUTPUT_DIR"
+      - name: Retain assessment evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: faa-risk-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/faa-risk/
+          if-no-files-found: error
+          retention-days: 14

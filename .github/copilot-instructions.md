@@ -43,3 +43,24 @@ When using `/fortify-remediate`, ScanCentral-created SAST finding paths may be p
 Non-trivial features should have a `specs/<NNN>-<feature-slug>/` folder with `spec.md`, `plan.md`,
 and `tasks.md`, copied from `specs/templates/`. Read `specs/memory/constitution.md` first — it is
 the source of truth for the principles condensed above. See `specs/README.md` for the full workflow.
+
+## Commit Messages
+
+Do not add `Co-authored-by` trailers or AI co-author attribution to suggested or created commit messages in this repository.
+
+## Pull Request Declarations
+
+- When drafting, creating or updating a PR description, use `.github/PULL_REQUEST_TEMPLATE.md`
+  and preserve its headings, comments, checklist items and declaration field labels.
+- Review the entire PR diff, including tooling and workflows. Populate AI-assistance and
+  security-impact declarations only from verified evidence or explicit user answers.
+- Before presenting a ready-to-submit description or publishing it, collect missing or uncertain
+  declaration answers from the user. Do not silently leave answer placeholders or invent values.
+- Always obtain explicit user confirmation of whether a human has reviewed all AI-generated code
+  before answering the manual-review declaration. Agent review, tests and scans do not count as
+  human review. Use `no` for incomplete human review and `not-applicable` only when no AI-generated
+  code is present.
+- If answers are unavailable, clearly identify the description as incomplete and list the
+  unresolved declarations. Do not publish it as complete or replace unknown answers with `no`.
+- Keep these guidance rules distinct from enforcement: the current risk assessment is audit-only
+  and records unanswered declarations as unknown; it does not block PR submission or merging.
