@@ -25,6 +25,8 @@ exact assessed head using base-revision control code and retain execution eviden
 - Recommended decisions remain advisory; low risk, disabled execution and forks record distinct skips.
 - A changed head/base, closed/draft PR or changed declarations/labels makes the old run stale.
 - Analyzer errors and malformed outputs fail explicitly; findings are retained, not a release gate.
+- Before merging this feature, a separately reviewed main-branch launcher can validate PR 26 using
+  an explicitly pinned candidate control/head SHA, without changing production PR trust selection.
 
 ### Edge cases
 
@@ -43,11 +45,16 @@ Cancellation/runner loss may prevent final evidence; stale/cancelled runs never 
 - **FR-005**: Record exact base/head/control/diff SHAs, assessment identity, status, duration,
   analyzer exit and finding count; require valid SARIF and nonempty Markdown for completed scans.
 - **FR-006**: Preserve existing SAST/SCA workflows, smoke-test defaults and application behavior.
+- **FR-007**: A temporary library-only pre-merge mode may accept an approved control SHA only for
+  manual dispatch from `main`, PR 26, and an exact matching same-repository head. The normal CLI
+  exposes no control override and still requires the PR base. Record the real trigger, launcher
+  SHA, control SHA and actual PR base separately; never fabricate a `pull_request_target` event.
 
 ## Out of Scope
 
 FoD/SSC import, PR comments, production release gates, automatic repository-protection changes,
 fork scans, arbitrary head overrides, LLM/provider provisioning and independent runner sandboxing.
+The fixed-PR pre-merge launcher is a temporary validation exception, not a general branch scanner.
 
 ## Success Criteria
 

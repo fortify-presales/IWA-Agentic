@@ -22,6 +22,10 @@ Share license filtering and analyzer/output validation with the smoke helper, no
   sandbox the FAA agent or restrict organization secrets independently.
 - **Activation**: `FAA_PR_SCANS_ENABLED=true` after merged-control review. Existing jobs are unaffected.
 - **Provider and licensing**: reuse existing FoD/SSC selection and OpenAI secret mapping.
+- **Pre-merge proof**: a separate `bootstrap/faa-pr26-launcher` branch based on main contains only
+  a manual launcher workflow with a literal approved candidate SHA and fixed PR 26. It must be
+  reviewed and merged before dispatch. The candidate helper exposes a library-only validation
+  parameter, guarded by main/manual-dispatch/PR/head checks; the normal CLI cannot use it.
 
 ## Constitution Check
 
@@ -47,3 +51,6 @@ Share license filtering and analyzer/output validation with the smoke helper, no
 
 No constitution violations. External protections and runner isolation are documented prerequisites
 for production use, not silently asserted or configured by this change.
+The bootstrap explicitly trusts reviewed, pinned candidate code instead of the PR base, and records
+that distinction. Updating PR 26's head requires re-reviewing and repinning the launcher. Local
+candidate commits and the bootstrap remain unpublished until the user completes the new review.

@@ -125,6 +125,47 @@ The [implementation specification](../021-faa-pr-execution/spec.md) extends the 
 `workflow_run` or trust an artifact supplied by a PR.
 Hosted helper tests run on `ubuntu-latest` only; no OS matrix is required for this Linux pilot.
 
+### Prove the chain before merging PR 26
+
+The existing manual risk-workflow dispatch tests candidate helpers but intentionally skips live
+assessment/scanning. To prove actual risk selection and FAA execution before merging PR 26,
+review the temporary `bootstrap/faa-pr26-launcher` branch and its
+`.github/workflows/faa-pr-premerge-validation.yml` separately.
+
+The bootstrap must be based on main and contain a literal approved helper SHA, not a mutable
+branch or a user-selectable control ref. It is fixed to PR 26. Its candidate controls and source
+head must match that exact SHA, in separate checkouts. A narrowly guarded, library-only validation
+entry point permits this approved revision for manual dispatch from main; the normal PR CLI
+continues to require base controls. This validates the real helper and current PR metadata without
+pretending the dispatch is a `pull_request_target` event.
+
+1. Review the added helper validation support and candidate changes. Publish the exact candidate
+   commit only after human review; review the bootstrap's literal pin against it. Changes to PR 26
+   after pinning require re-review and a new pin.
+2. Publish and merge **only the bootstrap PR** into main. Do not merge PR 26 yet. Its own trusted
+   launcher, not the unmerged feature workflow, is now available.
+3. Confirm `FAA_PR_SCANS_ENABLED=true`, the existing runner/licensing/provider settings and spend
+   approval. The manual launch requires explicit consent and can incur FAA/LLM charges:
+
+   ```powershell
+   gh workflow run faa-pr-premerge-validation.yml --repo fortify-presales/IWA-Agentic --ref main -f run_faa=true
+   ```
+
+4. Require the Ubuntu helper tests to pass, then inspect the self-hosted run. The bootstrap first
+   fetches the real open PR snapshot and refuses an unapproved head. Risk is recomputed by the
+   pinned helper; only a mandatory decision invokes FAA.
+5. In the retained artifact, inspect `faa-risk-result.json` for score, mandatory decision, reasons,
+   policy hash and assessment identity. Inspect `faa-pr-execution.json` for
+   `executionContext: premerge-validation`, `triggerEvent: workflow_dispatch`, the actual
+   `launcherSha` on main, candidate `controlSha`/`headSha`, actual PR `baseSha`, merge-base range,
+   analyzer invocation/exit, status and findings. Require valid SARIF and nonempty FAA Markdown for
+   a completed scan; skipped or stale execution is not proof of scanning. The bootstrap job fails
+   explicitly if the helper does not record `succeeded`, without forcing an advisory scan.
+
+This is an explicit trust exception for a reviewed immutable candidate, not an independent sandbox
+or a generic arbitrary-PR scanner. The later automatic base-controlled PR event path still needs
+post-merge verification. Remove the temporary launcher/validation exception after the pilot.
+
 ### Activation and first live verification
 
 1. Review and merge the new controls first. This introducing PR cannot exercise its own changed

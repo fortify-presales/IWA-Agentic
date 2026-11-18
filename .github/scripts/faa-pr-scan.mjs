@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assessPullRequest, parseNumstat } from './faa-risk-adapter.mjs';
+import { assessPullRequest, parseNumstat, validateResult } from './faa-risk-adapter.mjs';
 import { createFaaEnvironment, runFaaAnalysis, selectExecution } from './faa-execution.mjs';
 
 function requireValue(condition, message) {
@@ -42,7 +43,7 @@ async function getCurrentPr(number, env) {
 
 export async function runPrScan({
   controlDir, sourceDir, outputDir, event, env = process.env, execute = execFileSync,
-  getPullRequest = (number) => getCurrentPr(number, env),
+  getPullRequest = (number) => getCurrentPr(number, env), approvedControlSha,
 }) {
   const started = Date.now();
   const record = {
@@ -56,14 +57,27 @@ export async function runPrScan({
   });
   let failure;
   try {
-    requireValue(env.GITHUB_EVENT_NAME === 'pull_request_target'
+    // Only a separately reviewed main-branch launcher may supply this library-only override.
+    const premerge = approvedControlSha !== undefined;
+    requireValue((premerge
+      ? env.GITHUB_EVENT_NAME === 'workflow_dispatch' && env.GITHUB_REF === 'refs/heads/main'
+      : env.GITHUB_EVENT_NAME === 'pull_request_target')
       && env.GITHUB_REPOSITORY === 'fortify-presales/IWA-Agentic'
-      && event?.repository?.full_name === env.GITHUB_REPOSITORY, 'Only this repository PR target event is allowed');
-    const policy = JSON.parse(await readFile(join(controlDir, '.github', 'faa-policy.json'), 'utf8'));
+      && event?.repository?.full_name === env.GITHUB_REPOSITORY, 'Unapproved PR execution context');
+    const policyText = await readFile(join(controlDir, '.github', 'faa-policy.json'), 'utf8');
+    const policy = JSON.parse(policyText);
     // Validate event SHAs before using them as Git arguments.
     assessPullRequest(event, [], policy);
     const pr = event.pull_request;
     requireValue(pr.base.ref === 'main', 'Only PRs targeting main can select FAA');
+    if (premerge) {
+      requireValue(/^[a-f0-9]{40}$/.test(approvedControlSha)
+        && /^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? '')
+        && pr.number === 26 && pr.head.sha === approvedControlSha
+        && pr.head.repo?.id === event.repository.id,
+      'Pre-merge validation requires PR 26 at its explicitly approved control/head SHA');
+    }
+    const expectedControlSha = premerge ? approvedControlSha : pr.base.sha;
     for (const key of ['GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT']) {
       requireValue(/^[1-9][0-9]*$/.test(env[key] ?? ''), `Missing/invalid ${key}`);
     }
@@ -72,6 +86,9 @@ export async function runPrScan({
       baseSha: pr.base.sha, headSha: pr.head.sha, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
       assessmentId: `${event.repository.id}:${pr.number}:${pr.head.sha}:${env.GITHUB_RUN_ID}:${env.GITHUB_RUN_ATTEMPT}`,
       buildId: `github-pr-${event.repository.id}-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`,
+      executionContext: premerge ? 'premerge-validation' : 'pull-request',
+      triggerEvent: env.GITHUB_EVENT_NAME,
+      ...(premerge ? { launcherSha: env.GITHUB_SHA } : {}),
     });
     const controls = await realpath(controlDir);
     const source = await realpath(sourceDir);
@@ -79,8 +96,8 @@ export async function runPrScan({
       'Controls and PR source must be separate, non-nested checkouts');
     requireValue(!isWithin(source, await realpath(outputDir)), 'Scan outputs must be outside PR source');
     record.controlSha = git(controlDir, 'rev-parse', 'HEAD').trim();
-    requireValue(record.controlSha === pr.base.sha && env.FAA_TRUSTED_CONTROL_SHA === pr.base.sha,
-      'Control checkout does not match the immutable PR base');
+    requireValue(record.controlSha === expectedControlSha && env.FAA_TRUSTED_CONTROL_SHA === expectedControlSha,
+      'Control checkout does not match the immutable approved revision (PR base in normal execution)');
     requireValue(!git(controlDir, 'status', '--porcelain', '--untracked-files=normal', '--ignored').trim(),
       'Trusted control checkout must be clean');
     requireValue(git(sourceDir, 'rev-parse', 'HEAD').trim() === pr.head.sha,
@@ -94,10 +111,16 @@ export async function runPrScan({
     const changes = parseNumstat(git(sourceDir, '-c', 'core.quotepath=false', 'diff',
       '--no-ext-diff', '--no-textconv', '--find-renames', '--numstat', '-z',
       record.diffBaseSha, pr.head.sha, '--'));
-    const result = assessPullRequest(event, changes, policy);
+    const result = validateResult(assessPullRequest(event, changes, policy, {
+      assessedAt: record.startedAt, controlSha: record.controlSha, diffBaseSha: record.diffBaseSha,
+      assessmentId: record.assessmentId, executionContext: record.executionContext,
+      policySha256: createHash('sha256').update(policyText).digest('hex'),
+    }));
     record.score = result.score;
     record.decision = result.decision;
     record.status = selectExecution(result, event, env.FAA_PR_SCANS_ENABLED);
+    result.faaExecution.status = record.status;
+    await writeFile(join(outputDir, 'faa-risk-result.json'), `${JSON.stringify(result, null, 2)}\n`);
     if (record.status === 'pending-execution') {
       if (!sameSnapshot(await getPullRequest(pr.number), event)) {
         record.status = 'skipped-stale';
@@ -136,13 +159,15 @@ export async function runPrScan({
   const summary = [
     '## FAA PR execution (audit only)', '',
     `Status: **${record.status}**`,
+    `Execution context: **${record.executionContext ?? 'not validated'}**`,
+    `Risk score: ${record.score ?? 'not assessed'} | Decision: **${record.decision ?? 'not assessed'}**`,
     `Head: \`${record.headSha ?? 'not validated'}\``,
     `Control revision: \`${record.controlSha ?? 'not validated'}\``,
     `Range: \`${record.range ?? 'not selected'}\``,
     `Analyzer invoked: **${record.analyzerInvoked ? 'yes' : 'no'}**`,
     `Findings: ${record.findingCount ?? 'not available'}`,
     `Duration: ${record.durationMs} ms`, '',
-    'PR scripts were not installed, built or executed by this workflow. No FoD/SSC import or release gate.',
+    'Source-checkout scripts were not installed, built or executed by this workflow. No FoD/SSC import or release gate.',
     ...(failure ? ['', 'Execution failed; inspect the job log and execution record.'] : []), '',
   ].join('\n');
   await writeFile(join(outputDir, 'faa-pr-execution-summary.md'), summary);

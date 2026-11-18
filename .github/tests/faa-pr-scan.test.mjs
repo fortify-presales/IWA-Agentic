@@ -31,7 +31,8 @@ async function fixture(t) {
   };
   git('init', '--template=');
   const baseSha = commit();
-  execFileSync('git', ['clone', '--no-hardlinks', '--template=', sourceDir, controlDir], { stdio: 'pipe' });
+  execFileSync('git', ['clone', '--no-hardlinks', '--template=', '--config', 'core.autocrlf=false',
+    sourceDir, controlDir], { stdio: 'pipe' });
   await writeFile(join(sourceDir, 'sample.ts'), 'export const value = 2;\n');
   await writeFile(join(sourceDir, '.github', 'faa-policy.json'), '{"invalid":"PR policy must not be loaded"}\n');
   await writeFile(join(sourceDir, '.github', 'scripts', 'faa-pr-scan.mjs'), 'throw new Error("PR helper must not run");\n');
@@ -275,4 +276,53 @@ test('GitHub API errors, FAA failures, and malformed outputs are recorded and re
   };
   await assert.rejects(runPrScan({ ...f, execute: noOutputs }), { code: 'ENOENT' });
   assert.equal(JSON.parse(await readFile(join(f.outputDir, 'faa-pr-execution.json'), 'utf8')).status, 'failed');
+});
+
+test('pre-merge validation pins PR 26 controls/head while preserving the real base and trigger', async (t) => {
+  const f = await fixture(t);
+  const baseSha = f.event.pull_request.base.sha;
+  await writeFile(join(f.sourceDir, '.github', 'faa-policy.json'),
+    await readFile(join(f.controlDir, '.github', 'faa-policy.json')));
+  const approvedControlSha = f.commit();
+  f.gitAt(f.controlDir, 'fetch', f.sourceDir, approvedControlSha);
+  f.gitAt(f.controlDir, 'switch', '--detach', approvedControlSha);
+  f.event.pull_request.number = 26;
+  f.event.pull_request.head.sha = approvedControlSha;
+  Object.assign(f.env, {
+    GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main',
+    GITHUB_SHA: baseSha, FAA_TRUSTED_CONTROL_SHA: approvedControlSha,
+  });
+  const record = await runPrScan({ ...f, approvedControlSha });
+  assert.equal(record.status, 'succeeded');
+  assert.equal(record.baseSha, baseSha);
+  assert.equal(record.controlSha, approvedControlSha);
+  assert.equal(record.headSha, approvedControlSha);
+  assert.equal(record.executionContext, 'premerge-validation');
+  assert.equal(record.triggerEvent, 'workflow_dispatch');
+  assert.equal(record.launcherSha, baseSha);
+  const risk = JSON.parse(await readFile(join(f.outputDir, 'faa-risk-result.json'), 'utf8'));
+  assert.equal(risk.decision, 'faa-mandatory');
+  assert.equal(risk.faaExecution.status, 'pending-execution');
+  assert.equal(risk.policySha256.length, 64);
+  assert.equal(risk.assessmentId, record.assessmentId);
+  assert.equal(risk.controlSha, approvedControlSha);
+  assert.equal(risk.baseSha, baseSha);
+  f.calls.length = 0;
+  for (const overrides of [
+    { approvedControlSha: undefined },
+    { env: { ...f.env, GITHUB_EVENT_NAME: 'pull_request_target' } },
+    { env: { ...f.env, GITHUB_REF: 'refs/heads/feature/021-faa-pr-execution' } },
+    { env: { ...f.env, GITHUB_SHA: 'main' } },
+    { approvedControlSha: 'main' },
+    { approvedControlSha: baseSha },
+    { event: { ...f.event, pull_request: { ...f.event.pull_request, number: 27 } } },
+    { env: { ...f.env, FAA_TRUSTED_CONTROL_SHA: baseSha } },
+  ]) {
+    await assert.rejects(runPrScan({ ...f, approvedControlSha, ...overrides }));
+    assert.equal(f.calls.length, 0);
+  }
+  await assert.rejects(runPrScan({
+    ...f, env: { ...f.env, GITHUB_EVENT_NAME: 'pull_request_target', FAA_APPROVED_CONTROL_SHA: approvedControlSha },
+  }), /Control checkout does not match/);
+  assert.equal(f.calls.length, 0, 'An environment variable cannot enable the library-only validation mode');
 });
