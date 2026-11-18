@@ -4,6 +4,7 @@ import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, TextDecoder } from 'node:util';
+import { selectExecution } from './faa-execution.mjs';
 
 const policyPath = fileURLToPath(new URL('../faa-policy.json', import.meta.url));
 const declarations = {
@@ -193,7 +194,8 @@ export function assessPullRequest(event, changes, policy, context = {}) {
     })),
     declarations: declaration.values, declarationIssues: declaration.issues, conflicts,
     notEvaluated,
-    faaExecution: { status: decision === 'sast-sca-only' ? 'not-selected' : 'pending-runner-setup' },
+    faaExecution: { status: decision === 'sast-sca-only' ? 'not-selected'
+      : mandatory ? 'pending-execution' : 'advisory-only' },
   };
 }
 
@@ -212,7 +214,7 @@ export function formatSummary(result) {
     `Head: \`${result.headSha}\``, '',
     '| Signal | Points | Mandatory | Evidence |', '| --- | ---: | --- | --- |',
     ...result.reasons.map((r) => `| ${escape(r.reason)} | ${r.points} | ${r.mandatory ? 'Yes' : 'No'} | ${r.evidence.slice(0, 20).map(escape).join(', ')}${r.evidence.length > 20 ? ' (more in JSON)' : ''} |`),
-    '', `FAA execution: **${result.faaExecution.status}**. No FAA scan or FoD import was performed.`,
+    '', `FAA execution: **${result.faaExecution.status}**. No FAA scan or FoD import was performed by this assessment job.`,
     `Application classification: **${escape(result.application.classificationStatus)}**. This is not a production release gate.`,
     `Unanswered/unrecognized declarations: ${result.declarationIssues.length}; declaration/path conflicts: ${result.conflicts.length}.`,
     `Not evaluated: ${result.notEvaluated.map(escape).join(', ')}.`, '',
@@ -248,13 +250,14 @@ export async function runAdapter({ eventPath, sourceDir, outputDir, env = proces
     policySha256: createHash('sha256').update(policyText).digest('hex'),
     assessmentId: `${event.repository.id}:${pr.number}:${pr.head.sha}:${env.GITHUB_RUN_ID ?? 'local'}:${env.GITHUB_RUN_ATTEMPT ?? '1'}`,
   }));
+  result.faaExecution.status = selectExecution(result, event, env.FAA_PR_SCANS_ENABLED);
   const summary = formatSummary(result);
   await mkdir(outputDir, { recursive: true });
   await writeFile(join(outputDir, 'faa-risk-result.json'), `${JSON.stringify(result, null, 2)}\n`);
   await writeFile(join(outputDir, 'faa-risk-summary.md'), summary);
   if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, summary);
   if (env.GITHUB_OUTPUT) {
-    await appendFile(env.GITHUB_OUTPUT, `score=${result.score}\nmandatory=${result.mandatory}\ndecision=${result.decision}\n`);
+    await appendFile(env.GITHUB_OUTPUT, `score=${result.score}\nmandatory=${result.mandatory}\ndecision=${result.decision}\nexecute_faa=${result.faaExecution.status === 'pending-execution'}\n`);
   }
   return result;
 }

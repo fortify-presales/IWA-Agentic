@@ -95,7 +95,7 @@ test('secrets and incident declarations trigger mandatory; API requires internet
   const exposed = assess('', [change('packages/api/src/api/v3/products.ts')], actualPolicy);
   assert.equal(exposed.score, 8);
   assert.equal(exposed.mandatory, true);
-  assert.equal(exposed.faaExecution.status, 'pending-runner-setup');
+  assert.equal(exposed.faaExecution.status, 'pending-execution');
   const policy = neutralPolicy();
   policy.paths['previous-incident-area'] = ['^packages/web/src/incident\\.ts$'];
   assert.equal(assess('', [change('packages/web/src/incident.ts')], policy).mandatory, true);
@@ -218,10 +218,12 @@ test('Git-backed adapter uses trusted policy, merge-base diff, and emits outputs
   const input = event('- Authentication or authorization changed: no');
   input.pull_request.base.sha = baseSha;
   input.pull_request.head.sha = headSha;
+  input.pull_request.head.repo = { id: input.repository.id };
   const eventPath = join(temp, 'event.json');
   await writeFile(eventPath, JSON.stringify(input));
   const outputDir = join(temp, 'out');
-  const env = { GITHUB_OUTPUT: join(temp, 'outputs'), GITHUB_STEP_SUMMARY: join(temp, 'summary'), GITHUB_RUN_ID: '99' };
+  const env = { GITHUB_OUTPUT: join(temp, 'outputs'), GITHUB_STEP_SUMMARY: join(temp, 'summary'),
+    GITHUB_RUN_ID: '99', FAA_PR_SCANS_ENABLED: 'true' };
   const result = await runAdapter({ eventPath, sourceDir: source, outputDir, env });
   assert.equal(result.score, 9);
   assert.equal(result.decision, 'faa-mandatory');
@@ -230,7 +232,7 @@ test('Git-backed adapter uses trusted policy, merge-base diff, and emits outputs
   assert.equal(result.policySha256.length, 64);
   assert.ok(result.reasons.some((r) => r.evidence.includes('packages/api/src/services/AuthService.ts')));
   assert.ok(result.assessmentId.endsWith(':99:1'));
-  assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), /score=9\nmandatory=true\ndecision=faa-mandatory\n/);
+  assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), /score=9\nmandatory=true\ndecision=faa-mandatory\nexecute_faa=true\n/);
   assert.equal(JSON.parse(await readFile(join(outputDir, 'faa-risk-result.json'), 'utf8')).repositoryId, 123);
   await assert.rejects(runAdapter({
     eventPath, sourceDir: source, outputDir: join(temp, 'bad-controls'),
