@@ -1,286 +1,178 @@
-import { createHash } from 'node:crypto';
+/*
+ * FAA risk adapter: decides whether a pull request should run a differential
+ * Fortify Agentic Analyzer (FAA) scan. Dependency-free; needs Node 20+ and Git.
+ *
+ * HOW IT WORKS
+ *   1. Reads the GitHub pull_request event (labels, body) and the policy JSON.
+ *   2. Lists changed files/lines between merge-base(base, head) and head.
+ *   3. Adds the points of every matching policy rule. FAA is selected when
+ *      score >= threshold, the PR changes (not only deletes) files, and the PR
+ *      is not from a fork.
+ *
+ * OUTPUTS
+ *   GITHUB_OUTPUT  score, do_faa (true|false), change_range (<merge-base>..<head>)
+ *   --output dir   faa-risk-result.json and faa-risk-summary.md
+ *   Step summary   the same Markdown, when GITHUB_STEP_SUMMARY is set
+ *
+ * USE IN ANOTHER REPOSITORY
+ *   Copy this script and faa-policy.json, then gate the FAA job on do_faa:
+ *     - uses: actions/checkout@v4
+ *       with: { ref: ${{ github.event.pull_request.head.sha }}, fetch-depth: 0 }
+ *     - id: risk
+ *       run: node .github/scripts/faa-risk-adapter.mjs --source . --policy .github/faa-policy.json --output "$RUNNER_TEMP/faa-risk"
+ *   then:  if: needs.<job>.outputs.do_faa == 'true'
+ *   and pass change_range to FAA as --differential.
+ *
+ * CUSTOMIZING
+ *   Edit the policy, not this script. Rule types (see _instructions in the policy):
+ *     label | paths | declaration | minChangedLines
+ *   To add a new rule type, add one case to ruleEvidence() returning the
+ *   evidence strings that matched (an empty array means no match), and allow its
+ *   key in conditionKeys.
+ *
+ * LOCAL TEST
+ *   gh api repos/<owner>/<repo>/pulls/<n> --jq '{pull_request: .}' > event.json
+ *   node faa-risk-adapter.mjs --event event.json --source <checkout-at-head> --output out
+ */
 import { execFileSync } from 'node:child_process';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseArgs, TextDecoder } from 'node:util';
+import { parseArgs } from 'node:util';
 
-const defaultPolicyPath = fileURLToPath(new URL('../faa-policy.json', import.meta.url));
-const declarations = {
-  ai: ['AI assistance used', ['none', 'low', 'significant', 'predominant']],
-  reviewed: ['AI-generated code manually reviewed', ['yes', 'no', 'not-applicable']],
-  business: ['Security-sensitive code generated or modified', ['yes', 'no']],
-  auth: ['Authentication or authorization changed', ['yes', 'no']],
-  secrets: ['Secrets, tokens, credentials, or vault access changed', ['yes', 'no']],
-  api: ['New or materially changed API', ['yes', 'no']],
-  integration: ['New integration or trust boundary', ['yes', 'no']],
-  dependency: ['New dependency introduced', ['yes', 'no']],
-  internet: ['Internet-facing behaviour changed', ['yes', 'no']],
-  data: ['Sensitive data processing changed', ['yes', 'no']],
-  incident: ['Previous security incident area changed', ['yes', 'no']],
-};
-const pathSignals = {
-  'authentication-authorization': ['auth', 'Authentication or authorization changed'],
-  'secrets-vault': ['secrets', 'Secrets or credential handling changed'],
-  'new-api': ['api', 'API changed (path or declaration proxy; not a semantic diff)'],
-  'external-integration': ['integration', 'Integration or trust boundary changed'],
-  'sensitive-business-logic': ['business', 'Security-sensitive business logic changed'],
-  'previous-incident-area': ['incident', 'Previous incident area changed'],
-};
-const scoreNames = [
-  'tier-1', 'internet-facing', 'restricted-data', 'confidential-data',
-  ...Object.keys(pathSignals), 'predominant-ai', 'significant-ai', 'unreviewed-ai',
-  'large-change', 'new-dependency',
-];
-const notEvaluated = [
-  'live-fod-ssc-metadata', 'faa-baseline-age', 'finding-suppressions',
-  'repository-topics', 'release-tags', 'semantic-api-and-dependency-diffs',
-];
+const usage = 'Usage: node faa-risk-adapter.mjs --source <checkout-at-pr-head> --output <dir> [--policy <policy.json>] [--event <event.json>]';
+const conditionKeys = ['label', 'paths', 'declaration', 'minChangedLines'];
 
-function requireValue(condition, message) {
+function check(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function positiveInteger(value) {
-  return Number.isSafeInteger(value) && value > 0;
-}
-
-function matches(path, patterns) {
-  return patterns.some((pattern) => new RegExp(pattern, 'i').test(path));
-}
-
 export function validatePolicy(policy) {
-  requireValue(policy?.version === 'pilot-1' && policy.mode === 'audit', 'Unsupported pilot policy version or mode');
-  requireValue(Array.isArray(policy.mandatorySignals)
-    && policy.mandatorySignals.every((name) => Object.hasOwn(pathSignals, name)), 'Invalid mandatory signals');
-  requireValue(typeof policy.mandatoryInternetApi === 'boolean', 'Invalid mandatory internet API setting');
-  requireValue(Array.isArray(policy.requiredLabels)
-    && policy.requiredLabels.every((name) => typeof name === 'string' && name.length > 0), 'Invalid required labels');
-  const app = policy.application;
-  requireValue(['tier-1', 'tier-2', 'tier-3'].includes(app?.tier), 'Invalid application tier');
-  requireValue(typeof app.internetFacing === 'boolean', 'Missing/invalid internetFacing metadata');
-  requireValue(['public', 'internal', 'confidential', 'restricted'].includes(app.dataClassification), 'Invalid data classification');
-  requireValue(['pilot-assumption', 'approved'].includes(app.classificationStatus), 'Missing classification status');
-  requireValue(positiveInteger(policy.thresholds?.recommended)
-    && positiveInteger(policy.thresholds?.mandatory)
-    && policy.thresholds.mandatory > policy.thresholds.recommended, 'Invalid risk thresholds');
-  requireValue(positiveInteger(policy.changeSize?.highRisk)
-    && positiveInteger(policy.changeSize?.general)
-    && policy.changeSize.general >= policy.changeSize.highRisk, 'Invalid change-size thresholds');
-  requireValue(policy.scores && Object.keys(policy.scores).length === scoreNames.length, 'Invalid score definitions');
-  for (const name of scoreNames) {
-    requireValue(Number.isSafeInteger(policy.scores[name]) && policy.scores[name] >= 0
-      && policy.scores[name] <= 100, `Missing/invalid score: ${name}`);
-  }
-  requireValue(policy.paths && Object.keys(policy.paths).length === Object.keys(pathSignals).length, 'Invalid path signal definitions');
-  for (const [name, patterns] of [
-    ...Object.keys(pathSignals).map((name) => [name, policy.paths[name]]),
-    ['dependencyPatterns', policy.dependencyPatterns], ['nonExecutablePatterns', policy.nonExecutablePatterns],
-  ]) {
-    requireValue(Array.isArray(patterns) && patterns.every((p) => typeof p === 'string' && p.length > 0), `Invalid patterns: ${name}`);
-    for (const pattern of patterns) new RegExp(pattern, 'i');
+  check(Number.isSafeInteger(policy?.threshold) && policy.threshold > 0, 'Policy threshold must be a positive integer');
+  check(Array.isArray(policy.rules) && policy.rules.length > 0, 'Policy rules must be a non-empty array');
+  for (const rule of policy.rules) {
+    check(typeof rule?.name === 'string' && rule.name, 'Every rule needs a name');
+    check(Number.isSafeInteger(rule.points) && rule.points >= 0, `Rule "${rule.name}": points must be a non-negative integer`);
+    const conditions = conditionKeys.filter((key) => key in rule);
+    check(conditions.length === 1, `Rule "${rule.name}": needs exactly one of ${conditionKeys.join(', ')}`);
+    if (rule.paths) {
+      check(Array.isArray(rule.paths) && rule.paths.length, `Rule "${rule.name}": paths must be a non-empty array`);
+      rule.paths.forEach((pattern) => new RegExp(pattern, 'i'));
+    }
+    if (rule.declaration) {
+      check(typeof rule.declaration.field === 'string' && Array.isArray(rule.declaration.values),
+        `Rule "${rule.name}": declaration needs field and values`);
+    }
+    if ('minChangedLines' in rule) {
+      check(Number.isSafeInteger(rule.minChangedLines) && rule.minChangedLines > 0, `Rule "${rule.name}": invalid minChangedLines`);
+    }
   }
   return policy;
 }
 
+// Reads '- <field>: <value>' lines from the PR body, ignoring HTML comments.
 export function parseDeclarations(body) {
-  requireValue(body === null || typeof body === 'string', 'Invalid PR body');
-  const lines = (body ?? '').replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/);
   const values = {};
-  const issues = [];
-  for (const [key, [field, allowed]] of Object.entries(declarations)) {
-    const prefix = `- ${field.toLowerCase()}:`;
-    const entries = lines.map((line) => line.trim()).filter((line) => line.toLowerCase().startsWith(prefix));
-    requireValue(entries.length <= 1, `Duplicate PR declaration: ${field}`);
-    const value = entries[0]?.slice(prefix.length).trim().toLowerCase();
-    values[key] = allowed.includes(value) ? value : 'unknown';
-    if (values[key] === 'unknown') issues.push({ field, status: value ? 'unrecognized' : 'unanswered', value: value ?? null });
+  for (const line of (body ?? '').replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/)) {
+    const match = /^\s*-\s*([^:]+):\s*(.*)$/.exec(line);
+    if (match && match[2].trim()) values[match[1].trim().toLowerCase()] = match[2].trim().toLowerCase();
   }
-  return { values, issues };
+  return values;
 }
 
-export function parseNumstat(buffer) {
-  const text = typeof buffer === 'string' ? buffer : new TextDecoder('utf-8', { fatal: true }).decode(buffer);
-  if (!text) return [];
-  requireValue(text.endsWith('\0'), 'Truncated Git numstat output');
-  const records = text.slice(0, -1).split('\0');
-  const changes = [];
-  for (let i = 0; i < records.length; i++) {
-    const match = /^([0-9]+|-)\t([0-9]+|-)\t([\s\S]*)$/.exec(records[i]);
-    requireValue(match, 'Malformed Git numstat record');
-    const [, added, deleted, path] = match;
-    const paths = path ? [path] : [records[++i], records[++i]];
-    requireValue(paths.every((p) => typeof p === 'string' && p.length > 0), 'Missing renamed Git path');
-    const binary = added === '-' && deleted === '-';
-    requireValue(binary || (added !== '-' && deleted !== '-'), 'Invalid binary line counts');
-    const change = { paths, added: binary ? 0 : Number(added), deleted: binary ? 0 : Number(deleted), binary };
-    requireValue(Number.isSafeInteger(change.added) && Number.isSafeInteger(change.deleted), 'Git line count exceeds safe integer range');
-    changes.push(change);
+function ruleEvidence(rule, pr) {
+  if (rule.label) return pr.labels.includes(rule.label) ? [`label:${rule.label}`] : [];
+  if (rule.paths) return pr.paths.filter((path) => rule.paths.some((p) => new RegExp(p, 'i').test(path)));
+  if (rule.declaration) {
+    const field = rule.declaration.field.toLowerCase();
+    const value = pr.declarations[field];
+    return rule.declaration.values.map((v) => v.toLowerCase()).includes(value) ? [`${rule.declaration.field}: ${value}`] : [];
   }
-  return changes;
+  return pr.changedLines >= rule.minChangedLines ? [`${pr.changedLines} changed lines`] : [];
 }
 
-export function assessPullRequest(event, changes, policy, context = {}) {
+// pr: { labels: string[], body: string, paths: string[], changedLines: number }
+export function assess(policy, pr) {
   validatePolicy(policy);
-  const pr = event?.pull_request;
-  requireValue(positiveInteger(event?.repository?.id)
-    && typeof event.repository.full_name === 'string'
-    && /^[\w.-]+\/[\w.-]+$/.test(event.repository.full_name), 'Missing/invalid repository identity');
-  requireValue(positiveInteger(pr?.number) && pr.base?.repo?.id === event.repository.id, 'Invalid PR identity');
-  requireValue(/^[a-f0-9]{40}$/.test(pr.base.sha) && /^[a-f0-9]{40}$/.test(pr.head?.sha), 'Invalid base/head SHA');
-  requireValue(pr.draft === false, 'Draft PRs are not assessed');
-  requireValue(Array.isArray(pr.labels) && pr.labels.every((label) => typeof label?.name === 'string'), 'Invalid PR labels');
-  const declaration = parseDeclarations(pr.body);
-  const declared = (key) => declaration.values[key] === 'yes' ? [`declaration:${declarations[key][0]}`] : [];
-  const paths = [...new Set(changes.flatMap((change) => change.paths))];
-  const reasons = [];
-  const conflicts = [];
-  const add = (signal, reason, evidence, mandatory = false) => {
-    if (evidence.length) reasons.push({
-      signal, reason, points: signal === 'faa-required' ? 0 : policy.scores[signal], mandatory, evidence,
-    });
-  };
-  const app = policy.application;
-  if (app.tier === 'tier-1') add('tier-1', 'Tier 1 application', ['policy:application.tier']);
-  const exposure = [...(app.internetFacing ? ['policy:application.internetFacing'] : []), ...declared('internet')];
-  add('internet-facing', 'Internet-facing application or declared exposure change', exposure);
-  if (['restricted', 'confidential'].includes(app.dataClassification)) {
-    add(`${app.dataClassification}-data`, `${app.dataClassification} data handling`, ['policy:application.dataClassification']);
-  }
-  const sensitivePaths = new Set();
-  let declaredSensitive = false;
-  for (const [signal, [field, reason]] of Object.entries(pathSignals)) {
-    const supportingPaths = paths.filter((path) => matches(path, policy.paths[signal]));
-    const evidence = [...supportingPaths, ...declared(field)];
-    if (supportingPaths.length && declaration.values[field] === 'no') {
-      conflicts.push({ field: declarations[field][0], declared: 'no', supportingPaths });
-    }
-    for (const path of supportingPaths) sensitivePaths.add(path);
-    if (declared(field).length) declaredSensitive = true;
-    add(signal, reason, evidence, policy.mandatorySignals.includes(signal)
-      || (policy.mandatoryInternetApi && signal === 'new-api' && exposure.length > 0));
-  }
-  if (declaration.values.ai === 'predominant') add('predominant-ai', 'Predominantly AI-assisted change', ['declaration:AI assistance used']);
-  if (declaration.values.ai === 'significant') add('significant-ai', 'Significantly AI-assisted change', ['declaration:AI assistance used']);
-  if (declaration.values.reviewed === 'no' && declaration.values.ai !== 'none') {
-    add('unreviewed-ai', 'AI-generated code declared not manually reviewed', ['declaration:AI-generated code manually reviewed']);
-  }
-  const executableChanges = changes.filter((change) => change.paths.some((path) => !matches(path, policy.nonExecutablePatterns)));
-  const changedLines = executableChanges.reduce((total, change) => total + change.added + change.deleted, 0);
-  requireValue(Number.isSafeInteger(changedLines), 'Changed-line total exceeds safe integer range');
-  const highRiskChangedLines = declaredSensitive ? changedLines : executableChanges
-    .filter((change) => change.paths.some((path) => sensitivePaths.has(path)))
-    .reduce((total, change) => total + change.added + change.deleted, 0);
-  if (changedLines >= policy.changeSize.general || highRiskChangedLines >= policy.changeSize.highRisk) {
-    add('large-change', 'Executable change meets general or high-risk line threshold', [
-      `changedLines:${changedLines}/${policy.changeSize.general}`,
-      `highRiskChangedLines:${highRiskChangedLines}/${policy.changeSize.highRisk}`,
-    ]);
-  }
-  add('new-dependency', 'Dependency manifest/lock file or declaration changed', [
-    ...paths.filter((path) => matches(path, policy.dependencyPatterns)), ...declared('dependency'),
-  ]);
-  add('faa-required', 'FAA explicitly required by PR label',
-    pr.labels.filter((label) => policy.requiredLabels.includes(label.name)).map((label) => `label:${label.name}`), true);
-  const score = Math.max(0, reasons.reduce((total, reason) => total + reason.points, 0));
-  const mandatory = reasons.some((reason) => reason.mandatory) || score >= policy.thresholds.mandatory;
-  const decision = mandatory ? 'faa-mandatory' : score >= policy.thresholds.recommended ? 'faa-recommended' : 'sast-sca-only';
-  return {
-    policyVersion: policy.version, mode: policy.mode, repository: event.repository.full_name,
-    repositoryId: event.repository.id, pullRequest: pr.number, baseSha: pr.base.sha, headSha: pr.head.sha,
-    ...context, score, mandatory, decision, changedLines, highRiskChangedLines, thresholds: policy.thresholds, reasons,
-    application: app,
-    metadataProvenance: Object.keys(app).map((field) => ({
-      field, value: app[field], source: 'policy', sourceObject: context.policySha256 ?? policy.version,
-      sourceField: `application.${field}`, retrievedAt: context.assessedAt ?? null,
-    })),
-    declarations: declaration.values, declarationIssues: declaration.issues, conflicts,
-    notEvaluated,
-    faaExecution: { status: decision === 'sast-sca-only' ? 'not-selected'
-      : mandatory ? 'pending-execution' : 'advisory-only' },
-  };
-}
-
-export function validateResult(result) {
-  requireValue(Number.isSafeInteger(result.score) && result.score >= 0 && typeof result.mandatory === 'boolean', 'Invalid score/mandatory output');
-  requireValue(['sast-sca-only', 'faa-recommended', 'faa-mandatory'].includes(result.decision), 'Invalid decision output');
-  requireValue(result.mandatory === (result.decision === 'faa-mandatory'), 'Inconsistent mandatory output');
-  return result;
+  const input = { ...pr, declarations: parseDeclarations(pr.body) };
+  const matched = policy.rules
+    .map((rule) => ({ name: rule.name, points: rule.points, evidence: ruleEvidence(rule, input) }))
+    .filter((rule) => rule.evidence.length);
+  const score = matched.reduce((total, rule) => total + rule.points, 0);
+  return { score, threshold: policy.threshold, selected: score >= policy.threshold, matched };
 }
 
 export function formatSummary(result) {
-  const escape = (value) => String(value).replace(/[&<>|`\\\r\n[\]()]/g, (char) => `&#${char.charCodeAt(0)};`);
+  const escape = (value) => String(value).replace(/[&<>|`\\\r\n[\]()]/g, (c) => `&#${c.charCodeAt(0)};`);
   return [
-    '## FAA risk assessment (audit only)', '',
-    `Score: **${result.score}** | Decision: **${result.decision}** | Executable lines: **${result.changedLines}**`, '',
-    `Head: \`${result.headSha}\``, '',
-    '| Signal | Points | Mandatory | Evidence |', '| --- | ---: | --- | --- |',
-    ...result.reasons.map((r) => `| ${escape(r.reason)} | ${r.points} | ${r.mandatory ? 'Yes' : 'No'} | ${r.evidence.slice(0, 20).map(escape).join(', ')}${r.evidence.length > 20 ? ' (more in JSON)' : ''} |`),
-    '', `FAA execution: **${result.faaExecution.status}**. No FAA scan or FoD import was performed by this assessment job.`,
-    `Application classification: **${escape(result.application.classificationStatus)}**. This is not a production release gate.`,
-    `Unanswered/unrecognized declarations: ${result.declarationIssues.length}; declaration/path conflicts: ${result.conflicts.length}.`,
-    `Not evaluated: ${result.notEvaluated.map(escape).join(', ')}.`, '',
+    '## FAA risk assessment', '',
+    `Score **${result.score}** / threshold **${result.threshold}** - run FAA: **${result.doFaa}**`, '',
+    '| Rule | Points | Evidence |', '| --- | ---: | --- |',
+    ...result.matched.map((r) => `| ${escape(r.name)} | ${r.points} | ${r.evidence.slice(0, 10).map(escape).join(', ')}${r.evidence.length > 10 ? ', ...' : ''} |`),
+    '', `Change range: \`${result.changeRange}\``, '',
   ].join('\n');
 }
 
-function git(sourceDir, args) {
-  return execFileSync('git', ['-C', sourceDir, ...args], {
-    timeout: 120_000, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
-  });
+function git(dir, args) {
+  return execFileSync('git', ['-C', dir, ...args], { maxBuffer: 64 * 1024 * 1024 }).toString();
 }
 
-export async function runAdapter({ eventPath, sourceDir, outputDir, policyPath = defaultPolicyPath, env = process.env }) {
+export async function runAdapter({ eventPath, sourceDir, outputDir, policyPath, env = process.env }) {
   const event = JSON.parse(await readFile(eventPath, 'utf8'));
-  const policyText = await readFile(policyPath, 'utf8');
-  const policy = validatePolicy(JSON.parse(policyText));
-  // Validate event data before using its SHAs as Git arguments.
-  assessPullRequest(event, [], policy);
+  const policy = validatePolicy(JSON.parse(await readFile(policyPath, 'utf8')));
   const pr = event.pull_request;
-  requireValue(git(sourceDir, ['rev-parse', 'HEAD']).toString().trim() === pr.head.sha, 'Source checkout does not match PR head');
-  const diffBaseSha = git(sourceDir, ['merge-base', pr.base.sha, pr.head.sha]).toString().trim();
-  const changes = parseNumstat(git(sourceDir, [
-    '-c', 'core.quotepath=false', 'diff', '--no-ext-diff', '--no-textconv',
-    '--find-renames', '--numstat', '-z', diffBaseSha, pr.head.sha, '--',
-  ]));
-  const assessedAt = new Date().toISOString();
-  const result = validateResult(assessPullRequest(event, changes, policy, {
-    assessedAt, diffBaseSha, changeRange: `${diffBaseSha}..${pr.head.sha}`,
-    policySha256: createHash('sha256').update(policyText).digest('hex'),
-    assessmentId: `${event.repository.id}:${pr.number}:${pr.head.sha}:${env.GITHUB_RUN_ID ?? 'local'}:${env.GITHUB_RUN_ATTEMPT ?? '1'}`,
-  }));
-  const hasChanges = git(sourceDir, [
-    'diff', '--no-ext-diff', '--no-textconv', '--name-only', '--diff-filter=ACMRT',
-    '-z', diffBaseSha, pr.head.sha, '--',
-  ]).length > 0;
-  result.doFaa = result.mandatory && hasChanges && pr.head.repo?.id === event.repository.id;
-  if (result.mandatory && !result.doFaa) {
-    result.faaExecution.status = pr.head.repo?.id !== event.repository.id ? 'skipped-fork' : 'skipped-no-changes';
-  }
+  check(pr && /^[a-f0-9]{40}$/.test(pr.base?.sha) && /^[a-f0-9]{40}$/.test(pr.head?.sha)
+    && Number.isSafeInteger(pr.base.repo?.id), 'Event is not a pull_request with base/head SHAs and base repository');
+  check(git(sourceDir, ['rev-parse', 'HEAD']).trim() === pr.head.sha, 'Source checkout does not match PR head');
+
+  const mergeBase = git(sourceDir, ['merge-base', pr.base.sha, pr.head.sha]).trim();
+  const numstat = git(sourceDir, ['diff', '--numstat', '-z', '--no-renames', mergeBase, pr.head.sha]);
+  const files = numstat.split('\0').filter(Boolean).map((record) => record.split('\t'));
+  const changedLines = files.reduce((total, [added, deleted]) => total + (Number(added) || 0) + (Number(deleted) || 0), 0);
+  const hasNonDeletions = git(sourceDir, ['diff', '--name-only', '--diff-filter=d', mergeBase, pr.head.sha]).trim() !== '';
+  const sameRepo = pr.head.repo?.id === pr.base.repo?.id;
+
+  const result = assess(policy, {
+    labels: (pr.labels ?? []).map((label) => label.name),
+    body: pr.body,
+    paths: files.map(([, , path]) => path),
+    changedLines,
+  });
+  result.doFaa = result.selected && hasNonDeletions && sameRepo;
+  result.skipReason = !result.selected ? 'below-threshold' : !sameRepo ? 'fork' : !hasNonDeletions ? 'no-changes' : null;
+  result.changeRange = `${mergeBase}..${pr.head.sha}`;
+  result.pullRequest = pr.number;
+
   const summary = formatSummary(result);
   await mkdir(outputDir, { recursive: true });
   await writeFile(join(outputDir, 'faa-risk-result.json'), `${JSON.stringify(result, null, 2)}\n`);
   await writeFile(join(outputDir, 'faa-risk-summary.md'), summary);
   if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, summary);
   if (env.GITHUB_OUTPUT) {
-    await appendFile(env.GITHUB_OUTPUT, `score=${result.score}\nmandatory=${result.mandatory}\ndecision=${result.decision}\ndo_faa=${result.doFaa}\nchange_range=${result.changeRange}\n`);
+    await appendFile(env.GITHUB_OUTPUT, `score=${result.score}\ndo_faa=${result.doFaa}\nchange_range=${result.changeRange}\n`);
   }
   return result;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const { values } = parseArgs({
-      options: { event: { type: 'string' }, source: { type: 'string' }, output: { type: 'string' }, policy: { type: 'string' } },
-    });
-    const eventPath = values.event ?? process.env.GITHUB_EVENT_PATH;
-    requireValue(eventPath && values.source && values.output, 'Usage: node faa-risk-adapter.mjs --event <event.json> --source <head-checkout> --output <directory> [--policy <policy.json>]');
-    const result = await runAdapter({
-      eventPath, sourceDir: resolve(values.source), outputDir: resolve(values.output),
-      policyPath: values.policy ? resolve(values.policy) : defaultPolicyPath,
-    });
-    console.log(`FAA risk: score=${result.score}, mandatory=${result.mandatory}, decision=${result.decision}`);
+    const { values } = parseArgs({ options: {
+      event: { type: 'string' }, source: { type: 'string' }, output: { type: 'string' },
+      policy: { type: 'string' }, help: { type: 'boolean' },
+    } });
+    if (values.help) {
+      console.log(usage);
+    } else {
+      const eventPath = values.event ?? process.env.GITHUB_EVENT_PATH;
+      check(eventPath && values.source && values.output, usage);
+      const result = await runAdapter({
+        eventPath, sourceDir: resolve(values.source), outputDir: resolve(values.output),
+        policyPath: resolve(values.policy ?? fileURLToPath(new URL('../faa-policy.json', import.meta.url))),
+      });
+      console.log(`FAA risk: score=${result.score}, threshold=${result.threshold}, do_faa=${result.doFaa}`);
+    }
   } catch (error) {
-    console.error(`FAA assessment failed: ${JSON.stringify(error.message)}`);
+    console.error(`FAA risk assessment failed: ${error.message}`);
     process.exitCode = 1;
   }
 }

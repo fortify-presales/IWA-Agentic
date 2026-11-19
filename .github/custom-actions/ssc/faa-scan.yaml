@@ -2,11 +2,13 @@
 
 author: Fortify
 usage:
-  header: Run a PR differential Fortify Agentic Analyzer scan
+  header: Run a scoped or PR differential Fortify Agentic Analyzer scan
   description: |
-    This action runs FAA only for an explicit PR and merge-base..head commit range,
-    and uploads the differential SARIF results to the specified SSC branch version.
-    There is no full-scan mode or arbitrary scan-options passthrough.
+    This action scans all files selected by --scope, or runs a PR differential scan
+    when --pr-number and --change-range are supplied together. In differential mode,
+    --scope optionally narrows the changed files further. Without a change range,
+    an explicit scope is required. There is no arbitrary scan-options passthrough.
+    SARIF results are uploaded to the specified SSC application version.
 
     An optional --baseline SARIF preserves FAA finding instance IDs across runs.
     It is independent of the Git differential and existing Fortify findings.
@@ -36,13 +38,13 @@ cli.options:
     required: true
   prNumber:
     names: --pr-number
-    description: PR number associated with this differential scan.
-    required: true
+    description: PR number; required with --change-range, otherwise omit both.
+    required: false
     default: ${#env('FAA_PR_NUMBER')}
   changeRange:
     names: --change-range
-    description: Exact merge-base..head range using two full Git commit SHAs.
-    required: true
+    description: Optional merge-base..head range using two full Git commit SHAs; requires --pr-number.
+    required: false
     default: ${#env('FAA_CHANGE_RANGE')}
   appVersion:
     names: --app-version, --av
@@ -52,6 +54,13 @@ cli.options:
       Application version must already exist in SSC.
     required: true
     default: ${#env('SSC_APPVERSION')?:#env('APP_VERSION')}
+  scope:
+    names: --scope
+    description: >-
+      Comma-separated files or directories to scan. Required without --change-range;
+      otherwise optionally narrows the differential scan. Defaults to FAA_SCOPE.
+    required: false
+    default: ${#env('FAA_SCOPE')}
   baseline:
     names: --baseline
     description: Optional previous FAA SARIF; defaults to FAA_PREVIOUS_SARIF.
@@ -83,10 +92,16 @@ cli.options:
     type: boolean
 
 steps:
-  - if: ${!cli.prNumber.matches('[1-9][0-9]*')}
-    throw: A positive PR number is required; non-PR scans are not supported.
-  - if: ${!cli.changeRange.matches('[a-f0-9]{40}[.]{2}[a-f0-9]{40}') || cli.changeRange.substring(0,40)==cli.changeRange.substring(42)}
-    throw: A nonempty merge-base..head range with two full commit SHAs is required; full scans are not supported.
+  - if: ${#isNotBlank(cli.changeRange) && (#isBlank(cli.prNumber) || !cli.prNumber.matches('[1-9][0-9]*'))}
+    throw: A positive PR number is required with --change-range.
+  - if: >-
+      ${#isNotBlank(cli.prNumber) && #isBlank(cli.changeRange)}
+    throw: A change range is required with --pr-number; omit both for a scope-only scan.
+  - if: ${#isNotBlank(cli.changeRange) && (!cli.changeRange.matches('[a-f0-9]{40}[.]{2}[a-f0-9]{40}') || cli.changeRange.substring(0,40)==cli.changeRange.substring(42))}
+    throw: A nonempty merge-base..head range with two full commit SHAs is required.
+  - if: >-
+      ${#isBlank(cli.changeRange) && #isBlank(cli.scope)}
+    throw: An explicit --scope is required without --change-range.
   - var.set:
       # fcli variable storing the uploaded artifact, used for waiting for artifact processing
       faaArtifactVarName: faa_scan_${#action.runID().replace('-','_')}
@@ -96,15 +111,16 @@ steps:
         cmd: >-
           fcli tool env init --preinstalled "--tools=fortifyaa${#isNotBlank(cli.faaPath) ? ':' + cli.faaPath : ''}"
   
-  # Run differential FAA scan using existing SSC findings as complementary context
+  # Run FAA using existing SSC findings as complementary context
   - run.fcli:
       RUN_FAA_SCAN:
         cmd: >
           fcli tool fortifyaa run --workdir "${cli.sourceDir}" --
-          -b "pr-${cli.prNumber}-${#action.runID()}"
+          -b "${#isNotBlank(cli.changeRange) ? 'pr-' + cli.prNumber : 'scope'}-${#action.runID()}"
           -scan "${cli.sourceDir}"
-          --differential "${cli.changeRange}"
+          ${#isNotBlank(cli.changeRange) ? '--differential "' + cli.changeRange + '"' : ''}
           --ssc-appversion "${cli.appVersion}"
+          ${#isNotBlank(cli.scope) ? '--scope "' + cli.scope + '"' : ''}
           ${#isNotBlank(cli.baseline) ? '--baseline "' + cli.baseline + '"' : ''}
           -o "${cli.faaOutput}"
           --output-format sarif,md-summary

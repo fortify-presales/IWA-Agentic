@@ -227,6 +227,8 @@ jobs:
           FAA_PR_NUMBER: ${{ github.event.pull_request.number }}
           FAA_PREVIOUS_SARIF: ${{ steps.previous.outputs.path }}
           SOURCE_DIR: ${{ github.workspace }}
+          # Restrict FAA to application code; the differential still selects changed files
+          FAA_SCOPE: ${{ github.workspace }}/packages
           # Same release the SAST job set up (fcli ci default: <repository>:<branch>)
           FOD_RELEASE: ${{ format('{0}:{1}', github.repository, github.head_ref) }}
           FCLI_DEFAULT_FOD_URL: ${{ vars.FOD_URL }}

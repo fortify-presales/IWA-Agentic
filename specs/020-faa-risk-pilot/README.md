@@ -8,7 +8,7 @@ FAA runs as two extra jobs in the existing platform workflow:
 
 1. **`FAA-Risk` (Ubuntu, parallel with SAST in normal mode):** run the tests and the dependency-free
    [risk adapter](../../.github/scripts/faa-risk-adapter.mjs). Publish the score,
-   decision, `do_faa` boolean and exact `merge-base(base,head)..head` range.
+   `do_faa` boolean and exact `merge-base(base,head)..head` range.
 2. **`FAA-Scan` (existing FAA runner):** normally waits for both `Fortify-AST-Scan` and
    `FAA-Risk`. Only for selected, same-repository, non-draft PRs, run the
    [FoD](../../.github/custom-actions/fod/faa-scan.yaml) or
@@ -30,31 +30,21 @@ next push. There is no push, manual or full FAA scan.
 
 ## Configurable criteria
 
-Edit [faa-policy.json](../../.github/faa-policy.json), not the adapter:
+Edit [faa-policy.json](../../.github/faa-policy.json), not the adapter. Its `_instructions`
+block explains the format. In short, it has one `threshold` and a list of `rules`. Each rule has a
+`name`, `points` and exactly one condition:
 
-- `scores`, `thresholds`: weights and inclusive recommended/mandatory cutoffs.
-- `mandatorySignals`: path/declaration signals that force scanning.
-- `mandatoryInternetApi`: whether an API change plus internet exposure forces scanning.
-- `requiredLabels`: labels that force scanning (initially `faa-required`).
-- `paths`: case-insensitive regular expressions against repository-relative Git paths.
-- `application`: standing application risk; the supplied classification is a pilot assumption.
-- `changeSize`, `dependencyPatterns`, `nonExecutablePatterns`: size and dependency criteria.
+- `label`: the PR has this label (`faa-required` is worth the full threshold, so it forces FAA).
+- `paths`: case-insensitive regular expressions matched against changed repository paths.
+- `declaration`: a `- <field>: <value>` answer in the PR body, from the existing PR template.
+- `minChangedLines`: added plus deleted lines in the PR are at least this number.
 
-Initial behavior is preserved: internet exposure contributes 4 points; scores 5-8 are
-advisory and 9+ select FAA. Auth, secrets and incident signals are mandatory regardless of
-score; an internet-facing API change is mandatory too. Each signal scores once.
-Size counts added plus deleted executable lines, using thresholds of 500 high-risk or
-1500 general lines. Renames retain both paths as evidence; binary changes add no lines.
-Lockfiles still contribute dependency risk. These are configurable heuristics, not semantic analysis.
+Each matching rule adds its points once; FAA is selected when the score reaches the threshold.
+These are configurable heuristics, not semantic analysis. Declarations can only add risk.
 
-Complete the existing PR-template declarations without changing their labels. Missing answers
-remain `unknown`; path evidence overrides negative declarations; duplicate answers fail.
-An agent review or passing test is not human manual review. Removing a label cannot cancel
-other mandatory evidence.
-
-The adapter contains no repository name, branch name, PR number, runner or credential
-configuration. Copy it and a policy to another repository, adjust its patterns/metadata,
-and optionally copy the declaration sections of the PR template.
+The adapter contains no repository-specific configuration. Copy it and a policy to another
+repository and adjust the rules; its header comment shows the workflow wiring and how to add
+a new rule type.
 
 ## Configuration and destinations
 
@@ -137,32 +127,48 @@ node .github\scripts\faa-risk-adapter.mjs --event C:\temp\pr-event.json --source
 
 `--event` defaults to `GITHUB_EVENT_PATH`; `--policy` defaults to the policy beside the
 script's parent directory. The source checkout must be at the event's head SHA and contain
-the base history. Required event fields are `repository.{id,full_name}` and
-`pull_request.{number,draft,body,labels,base.sha,base.repo.id,head.sha}`.
-`head.repo.id` must match the repository ID for `do_faa=true`.
+the base history. Required event fields are `pull_request.{number,body,labels,base.sha,base.repo.id,head.sha}`;
+`head.repo.id` must match `base.repo.id` for `do_faa=true`.
 
 Outputs written after successful assessment:
 
-- `faa-risk-result.json`: score, reasons, policy hash, PR identity, exact SHAs/range,
-  declarations, conflicts and `doFaa`.
+- `faa-risk-result.json`: score, threshold, matched rules with evidence, range and `doFaa`.
 - `faa-risk-summary.md`: human-readable evidence.
-- `GITHUB_OUTPUT`: `score`, `mandatory`, `decision`, `do_faa`, `change_range`.
+- `GITHUB_OUTPUT`: `score`, `do_faa`, `change_range`.
 
-Low/recommended scores, forks and empty/deleted-only diffs do not select FAA.
-The JSON status `pending-execution` means selected, not that a scan succeeded.
-Draft PRs are skipped by the workflow and rejected by local adapter invocation.
+Below-threshold scores, forks and deletion-only diffs do not select FAA.
+Draft PRs are skipped by the workflow.
 
 fcli 3.30.0's built-in `ci` action **does not implement `DO_FAA`**. The example therefore
 uses `if: needs.FAA-Risk.outputs.do_faa == 'true'` to gate a direct custom-action invocation,
 rather than setting an ignored environment variable or copying the built-in CI action.
 The same output can feed `DO_FAA` when a future CI integration supports it.
 
-Both platform actions require `--source-dir`, `--pr-number` and `--change-range`
-(or `SOURCE_DIR`, `FAA_PR_NUMBER`, `FAA_CHANGE_RANGE`). The target comes from `--rel` /
-`FOD_RELEASE` or `--av` / `SSC_APPVERSION`. Only two distinct full commit SHAs are accepted
-for the range. Arbitrary extra scan options and full-scan mode are deliberately unavailable.
+Both platform actions require `--source-dir` (or `SOURCE_DIR`). They support two modes:
+
+- **PR differential:** supply `--pr-number` and `--change-range` together (or
+  `FAA_PR_NUMBER`, `FAA_CHANGE_RANGE`). Only two distinct full commit SHAs are accepted
+  for the merge-base..head range. `--scope` optionally narrows the changed files.
+- **Scope-only:** omit both PR options and supply `--scope` (or `FAA_SCOPE`). FAA scans
+  all selected files, not just changed lines. Ensure `FAA_PR_NUMBER` and `FAA_CHANGE_RANGE`
+  are unset when using this mode. This mode is available for direct action use only;
+  the existing GitHub workflows remain PR differential scans.
+
+The target comes from `--rel` / `FOD_RELEASE` or `--av` / `SSC_APPVERSION`.
+Arbitrary extra scan options are unavailable. For example, with an authenticated fcli
+session and FAA already configured, scan all application files:
+
+```powershell
+fcli fod action run .github\custom-actions\fod\faa-scan.yaml --source-dir "$PWD" --scope "$PWD\packages" --rel "<existing-release>"
+fcli ssc action run .github\custom-actions\ssc\faa-scan.yaml --source-dir "$PWD" --scope "$PWD\packages" --av "<existing-app:version>"
+```
+
+These commands import/upload results to the specified target. Neither action runs SAST.
 The optional `--baseline` action option defaults to `FAA_PREVIOUS_SARIF` and is omitted
-from the FAA command when no validated previous report was restored.
+from the FAA command when no validated previous report was restored. The optional `--scope`
+option defaults to `FAA_SCOPE`; both workflows set it to `<workspace>/packages`, so only
+changed application files under `packages/` are analysed. `-scan` stays at the repository
+root because `--differential` needs the Git repository.
 
 ## Validation and demonstration
 
@@ -179,7 +185,7 @@ application vulnerability is necessary. Check the exact range in `faa-risk-resul
 the fcli scan/import step result, and the platform's **branch** target.
 The `faa-scan-<PR>` artifact (`faa-scan-ssc-<PR>` for SSC) contains `faa.sarif` and
 `faa.sarif.md`; the risk artifact is separate.
-Recommended/low-risk cases should retain risk evidence with the scan job skipped.
+Below-threshold cases should retain risk evidence with the scan job skipped.
 No skipped, cancelled or test-only job proves FAA execution.
 To prove baseline reuse, push two successive risk-selected changes on the same PR without
 changing its merge base. The first run publishes the scoped baseline artifact; after it
