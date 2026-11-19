@@ -6,6 +6,10 @@
 # Create GitHub Action Secrets for your version of the application:
 #   FOD_CLIENT_ID should be an API Key obtained from your FoD tenant.
 #   FOD_CLIENT_SECRET should be the secret for the API Key obtained for your FoD tenant.
+#   OPENAI_API_KEY is used by the optional FAA-Scan job (differential FAA on risky PRs).
+# Optional risk-based FAA (see specs/020-faa-risk-pilot/README.md):
+#   FAA_LICENSE_PLATFORM - "fod" (default) runs the FAA jobs here; "ssc" runs them in scancentral.yml.
+#   FAA_DEMO_ONLY       - "true" skips this workflow's SAST job on non-draft PRs; FAA requires an existing release.
 # Helpful hints:
 #   API Key credentials can be obtained from your FoD tenant, under Administration -> Settings -> API
 #   It is recommended to create credentials with 'Security Lead' Role selected.
@@ -26,6 +30,8 @@ on:
       - '.npmrc'
       - '.github/workflows/fod.yml'
       - '.github/custom-actions/fod/**'
+      - '.github/scripts/faa-sarif-baseline.mjs'
+      - '.github/tests/faa-sarif-baseline.test.mjs'
   push:
     branches: [ "main", "demo/fortify-remediate-fod" ]
     paths:
@@ -40,6 +46,10 @@ on:
 
 jobs:
   Fortify-AST-Scan:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == true ||
+      vars.FAA_DEMO_ONLY != 'true'
     runs-on: ubuntu-latest
     env:
       NEXUS_REPO_NPM: ${{ vars.NEXUS_REPO_NPM || 'https://registry.npmjs.org/' }}
@@ -112,3 +122,151 @@ jobs:
           # Use an absolute path (relative paths are resolved against fcli's cwd, not GITHUB_WORKSPACE)
           CHECK_POLICY_ACTION: ${{ github.workspace }}/.github/custom-actions/fod/check-policy.yaml
           CHECK_POLICY_EXTRA_OPTS: --on-unsigned=ignore --scan-types Static
+
+  # Risk-based FAA: score the PR, then run a differential FAA scan. In demo-only
+  # mode the existing branch release is used without running SAST first.
+  FAA-Risk-Summary:
+    if: >-
+      github.event_name == 'pull_request' && github.event.pull_request.draft == false &&
+      (vars.FAA_LICENSE_PLATFORM || 'fod') == 'fod'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      do_faa: ${{ steps.risk.outputs.do_faa }}
+      change_range: ${{ steps.risk.outputs.change_range }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Test risk criteria
+        run: node --test .github/tests/faa-*.test.mjs
+      - name: Assess PR risk
+        id: risk
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/faa-risk
+        run: node .github/scripts/faa-risk-adapter.mjs --source "$GITHUB_WORKSPACE" --policy .github/faa-policy.json --output "$OUTPUT_DIR"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: faa-risk-${{ github.event.pull_request.number }}
+          path: ${{ runner.temp }}/faa-risk
+          if-no-files-found: error
+          retention-days: 14
+
+  FAA-Scan:
+    needs: [Fortify-AST-Scan, FAA-Risk-Summary]
+    if: >-
+      !cancelled() &&
+      needs.FAA-Risk-Summary.result == 'success' &&
+      needs.FAA-Risk-Summary.outputs.do_faa == 'true' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        needs.Fortify-AST-Scan.result == 'success' ||
+        (
+          github.event_name == 'pull_request' &&
+          vars.FAA_DEMO_ONLY == 'true' &&
+          needs.Fortify-AST-Scan.result == 'skipped'
+        )
+      )
+    runs-on: [self-hosted, Linux, X64, fortify, faa]
+    timeout-minutes: 60
+    env:
+      FAA_PLATFORM: fod
+      FAA_CHANGE_RANGE: ${{ needs.FAA-Risk-Summary.outputs.change_range }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up fcli
+        uses: fortify/github-action/setup@v3
+        with:
+          fcli: bootstrapped
+        env:
+          FCLI_BOOTSTRAP_VERSION: v3.30.0
+      - name: Find previous FAA SARIF
+        id: baseline
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const baseline = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/faa-sarif-baseline.mjs`);
+            await baseline.findPrevious({ github, context, core });
+      - name: Download previous FAA SARIF
+        id: download
+        if: steps.baseline.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.baseline.outputs.artifact_name }}
+          run-id: ${{ steps.baseline.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/faa-previous
+      - name: Validate previous FAA SARIF
+        id: previous
+        if: steps.baseline.outputs.run_id != ''
+        uses: actions/github-script@v7
+        env:
+          FAA_BASELINE_METADATA: ${{ steps.baseline.outputs.metadata }}
+          FAA_BASELINE_DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
+        with:
+          script: |
+            const baseline = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/faa-sarif-baseline.mjs`);
+            await baseline.restorePrevious({ context, core });
+      - name: Run differential FAA and import results
+        shell: bash
+        env:
+          FAA_PR_NUMBER: ${{ github.event.pull_request.number }}
+          FAA_PREVIOUS_SARIF: ${{ steps.previous.outputs.path }}
+          SOURCE_DIR: ${{ github.workspace }}
+          # Restrict FAA to application code; the differential still selects changed files
+          FAA_SCOPE: ${{ github.workspace }}/packages
+          # Same release the SAST job set up (fcli ci default: <repository>:<branch>)
+          FOD_RELEASE: ${{ format('{0}:{1}', github.repository, github.head_ref) }}
+          FAA_FOD_SESSION: faa-${{ github.run_id }}-${{ github.run_attempt }}
+          FCLI_DEFAULT_FOD_URL: ${{ vars.FOD_URL }}
+          FCLI_DEFAULT_FOD_CLIENT_ID: ${{ secrets.FOD_CLIENT_ID }}
+          FCLI_DEFAULT_FOD_CLIENT_SECRET: ${{ secrets.FOD_CLIENT_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          session_opt="--fod-session=$FAA_FOD_SESSION"
+          fcli fod session login "$session_opt"
+          trap 'fcli fod session logout "$session_opt"' EXIT
+          mkdir -p "$RUNNER_TEMP/faa-output"
+          fcli fod action run "$GITHUB_WORKSPACE/.github/custom-actions/fod/faa-scan.yaml" \
+            "$session_opt" --on-unsigned=ignore --faa-fod-session "$FAA_FOD_SESSION" \
+            --output "$RUNNER_TEMP/faa-output/faa.sarif"
+          cat "$RUNNER_TEMP/faa-output/faa.sarif.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate current FAA SARIF
+        id: current
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const baseline = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/faa-sarif-baseline.mjs`);
+            await baseline.saveCurrent({ context, core });
+      - name: Upload reusable FAA SARIF
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.current.outputs.artifact_name }}
+          path: |
+            ${{ runner.temp }}/faa-output/faa.sarif
+            ${{ runner.temp }}/faa-output/faa-baseline.json
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: faa-scan-${{ github.event.pull_request.number }}
+          path: |
+            ${{ runner.temp }}/faa-output/faa.sarif
+            ${{ runner.temp }}/faa-output/faa.sarif.md
+          if-no-files-found: warn
+          retention-days: 14

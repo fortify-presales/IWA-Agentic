@@ -1,22 +1,28 @@
-# yaml-language-server: $schema=https://fortify.github.io/fcli/schemas/action/fcli-action-schema-dev-2.x.json
+# yaml-language-server: $schema=https://fortify.github.io/fcli/schemas/action/fcli-action-schema-2.10.0.json
 
 author: Fortify
 usage:
-  header: (PREVIEW) Run Fortify Agentic Analyzer Scan
+  header: Run a scoped or PR differential Fortify Agentic Analyzer scan
   description: |
-    This action runs a Fortify Agentic Analyzer (FAA) scan on the project source code
-    and imports the results to FoD as a SARIF report.
+    This action scans all files selected by --scope, or runs a PR differential scan
+    when --pr-number and --change-range are supplied together. In differential mode,
+    --scope optionally narrows the changed files further. Without a change range,
+    an explicit scope is required. There is no arbitrary scan-options passthrough.
+    SARIF results are imported to the specified FoD release.
+
+    An optional --baseline SARIF preserves FAA finding instance IDs across runs.
+    It is independent of the Git differential and existing Fortify findings.
     
-    The action automatically downloads the latest SAST scan results for the specified
-    release. FAA uses this context to avoid reporting duplicate issues that were already
-    found by SAST, resulting in higher quality analysis results. If no SAST results are
-    available, FAA runs without SAST context.
-    
-    NOTE: SAST context is taken from the latest SAST scan results available in FoD at the
-    time this action runs. If a more recent SAST scan hasn't completed yet, results from an
-    earlier SAST scan will be used. The fcli 'ci' action waits for SAST scan completion
-    (unless waiting is disabled) before running this action. The imported SARIF results are
-    processed asynchronously by FoD; this action doesn't wait for import completion.
+    FAA obtains the existing findings for the specified FoD release directly from FoD
+    (--fod-release) and uses them as complementary-analysis context, so that issues
+    already identified by Fortify SAST are not reported as new FAA findings. No FPR is
+    downloaded or processed locally.
+
+    NOTE: Existing findings are those available in FoD at the time this action runs.
+    If a more recent SAST scan hasn't completed yet, findings from an earlier scan will
+    be used. This action does not start or wait for a new SAST scan. The imported SARIF
+    results are processed asynchronously by FoD; this action doesn't wait for import
+    completion.
 
 config:
   output: immediate
@@ -31,15 +37,45 @@ cli.options:
     description: >-
       Source directory on which to run Fortify Agentic Analyzer scan.
       Defaults to environment variable `SOURCE_DIR` if not specified.
-    required: false
+    required: true
     default: ${#env('SOURCE_DIR')}
+  prNumber:
+    names: --pr-number
+    description: PR number; required with --change-range, otherwise omit both.
+    required: false
+    default: ${#env('FAA_PR_NUMBER')}
+  changeRange:
+    names: --change-range
+    description: Optional merge-base..head range using two full Git commit SHAs; requires --pr-number.
+    required: false
+    default: ${#env('FAA_CHANGE_RANGE')}
   release:
     names: --release, --rel
     description: >-
-      FoD release for which to download SAST results and import FAA scan results.
+      FoD release from which FAA obtains existing findings and into which FAA scan
+      results are imported.
       Release must already exist in FoD.
     required: true
     default: ${#env('FOD_RELEASE')}
+  faaFodSession:
+    names: --faa-fod-session
+    description: >-
+      Named fcli FoD session for FAA's native --fod-release integration.
+      Defaults to FAA_FOD_SESSION; omit to use fcli's default session.
+    required: false
+    default: ${#env('FAA_FOD_SESSION')}
+  scope:
+    names: --scope
+    description: >-
+      Comma-separated files or directories to scan. Required without --change-range;
+      otherwise optionally narrows the differential scan. Defaults to FAA_SCOPE.
+    required: false
+    default: ${#env('FAA_SCOPE')}
+  baseline:
+    names: --baseline
+    description: Optional previous FAA SARIF; defaults to FAA_PREVIOUS_SARIF.
+    required: false
+    default: ${#env('FAA_PREVIOUS_SARIF')}
   faaOutput:
     names: --output, -o
     description: >-
@@ -57,48 +93,38 @@ cli.options:
       If not specified and FAA_HOME is not set, the system PATH will be searched.
     required: false 
     default: ${#env('FAA_HOME')}
-  extraScanOpts:
-    names: --extra-scan-opts
-    description: >-
-      Extra options to be passed to the 'fortifyaa -scan' command.
-    required: false 
-
 steps:
-  - var.set:
-      # Used for passing extra options from ci action without bothering about escaping
-      extraScanOpts: ${#join(" ", {cli.extraScanOpts, global.faaScan?.extraOpts})}
-      sastFprFile: faa_input_${#action.runID().replace('-','_')}.fpr
-      fprArg: ''
-  
-  # Register FAA with self-test to fail early if FAA is not found or not properly configured
+  - if: ${#isNotBlank(cli.changeRange) && (#isBlank(cli.prNumber) || !cli.prNumber.matches('[1-9][0-9]*'))}
+    throw: A positive PR number is required with --change-range.
+  - if: >-
+      ${#isNotBlank(cli.prNumber) && #isBlank(cli.changeRange)}
+    throw: A change range is required with --pr-number; omit both for a scope-only scan.
+  - if: ${#isNotBlank(cli.changeRange) && (!cli.changeRange.matches('[a-f0-9]{40}[.]{2}[a-f0-9]{40}') || cli.changeRange.substring(0,40)==cli.changeRange.substring(42))}
+    throw: A nonempty merge-base..head range with two full commit SHAs is required.
+  - if: >-
+      ${#isBlank(cli.changeRange) && #isBlank(cli.scope)}
+    throw: An explicit --scope is required without --change-range.
   - run.fcli:
       SETUP_TOOLS:
         cmd: >-
-          fcli tool env init "--tools=fortifyaa${#isNotBlank(cli.faaPath) ? ':' + cli.faaPath : ''}"
+          fcli tool env init --preinstalled "--tools=fortifyaa${#isNotBlank(cli.faaPath) ? ':' + cli.faaPath : ''}"
   
-  # Download latest SAST results for the release
-  - run.fcli:
-      DOWNLOAD_LATEST_SAST_FPR:
-        cmd: fcli fod sast-scan download-latest --rel "${cli.release}" -f "${sastFprFile}"
-        status.check: false
-        on.success:
-          - var.set:
-              fprArg: '--fpr "${sastFprFile}"'
-        on.fail:
-          - log.warn:
-              msg: Unable to download latest SAST FPR for release '${cli.release}'; FAA scan will run without SAST context.
-              cause: ${lastException}
-  
-  # Run FAA scan with SAST FPR context if available, otherwise run without SAST context
+  # Run FAA using existing FoD findings as complementary context
   - run.fcli:
       RUN_FAA_SCAN:
         cmd: >
-          fcli tool fortifyaa run --
-          -clean
+          fcli tool fortifyaa run --workdir "${cli.sourceDir}" --
+          -b "${#isNotBlank(cli.changeRange) ? 'pr-' + cli.prNumber : 'scope'}-${#action.runID()}"
           -scan "${cli.sourceDir}"
-          ${fprArg}
+          ${#isNotBlank(cli.changeRange) ? '--differential "' + cli.changeRange + '"' : ''}
+          --fod-release "${cli.release}"
+          ${#isNotBlank(cli.faaFodSession) ? '--fcli-fod-session "' + cli.faaFodSession + '"' : ''}
+          ${#isNotBlank(cli.scope) ? '--scope "' + cli.scope + '"' : ''}
+          ${#isNotBlank(cli.baseline) ? '--baseline "' + cli.baseline + '"' : ''}
           -o "${cli.faaOutput}"
-          ${extraScanOpts}
+          --output-format sarif,md-summary
+          --output-md-summary "${cli.faaOutput}.md"
+          --message-format fod
         stdout: collect
         stderr: collect
         on.success:

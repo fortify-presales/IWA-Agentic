@@ -1,70 +1,70 @@
 {
-  "version": "pilot-1",
-  "mode": "audit",
-  "repository": "fortify-presales/IWA-Agentic",
-  "application": {
-    "tier": "tier-2",
-    "internetFacing": true,
-    "dataClassification": "internal",
-    "classificationStatus": "pilot-assumption"
-  },
-  "thresholds": { "recommended": 5, "mandatory": 9 },
-  "changeSize": { "highRisk": 500, "general": 1500 },
-  "scores": {
-    "tier-1": 5,
-    "internet-facing": 4,
-    "restricted-data": 4,
-    "confidential-data": 2,
-    "authentication-authorization": 5,
-    "secrets-vault": 5,
-    "new-api": 4,
-    "external-integration": 4,
-    "sensitive-business-logic": 4,
-    "predominant-ai": 2,
-    "significant-ai": 1,
-    "unreviewed-ai": 3,
-    "large-change": 2,
-    "new-dependency": 2,
-    "previous-incident-area": 3
-  },
-  "paths": {
-    "authentication-authorization": [
-      "(^|/)(auth|authentication|authorization|identity|permissions|roles|claims)/",
-      "^packages/api/src/services/(Auth|Mfa|User|Verification)Service\\.ts$",
-      "^packages/api/src/web/(default|user|userPublic)\\.ts$",
-      "^packages/api/src/middleware/(authenticateJwt|requireAuth|requireRole)\\.ts$",
-      "^packages/api/src/config/(passport|security)\\.ts$",
-      "^packages/api/src/utils/jwt\\.ts$",
-      "^packages/api/src/api/v3/(account|mfa|roles|users)\\.ts$",
-      "^packages/api/src/(models/(Authority|User|UserAuthority|RefreshToken)|repositories/(RefreshToken|Role|User)Repository)\\.ts$"
-    ],
-    "secrets-vault": [
-      "(^|/)(secrets|vault)/",
-      "(credential|keyvault|key-vault|secret|token)[^/]*\\.(ts|tsx|js|mjs|json)$",
-      "^packages/api/src/(utils/(jwt|crypto)|config/env)\\.ts$",
-      "(^|/)\\.env($|\\.)"
-    ],
-    "new-api": [
-      "^packages/api/src/api/v3/.*\\.ts$",
-      "(^|/)(openapi|swagger)[^/]*\\.(json|ya?ml)$"
-    ],
-    "external-integration": [
-      "^packages/api/src/services/(Email|Sms)Service\\.ts$",
-      "^packages/agent/src/.*(tool|connector|client|provider)[^/]*\\.(ts|js)$"
-    ],
-    "sensitive-business-logic": [
-      "^packages/api/src/services/(Order|User|Verification)Service\\.ts$",
-      "^packages/api/src/api/v3/(orders|crypto)\\.ts$"
-    ],
-    "previous-incident-area": []
-  },
-  "dependencyPatterns": [
-    "(^|/)(package\\.json|package-lock\\.json|npm-shrinkwrap\\.json|yarn\\.lock|pnpm-lock\\.yaml)$"
+  "_instructions": [
+    "Risk criteria that decide whether a PR runs a differential Fortify Agentic Analyzer (FAA) scan.",
+    "Every matching rule adds its points once. FAA runs when the total is >= threshold.",
+    "Give a rule points >= threshold to make it force FAA on its own.",
+    "Each rule needs a name, points and exactly ONE condition:",
+    "  label: matches when the PR has this label, e.g. \"faa-required\".",
+    "  paths: list of case-insensitive regular expressions matched against changed, repository-relative paths (forward slashes).",
+    "  declaration: {\"field\": \"<PR body label>\", \"values\": [...]} matches a PR body line '- <field>: <value>' (see .github/PULL_REQUEST_TEMPLATE.md).",
+    "  minChangedLines: matches when added + deleted lines across the PR are >= this number.",
+    "To extend: add, remove or re-weight rules, or change threshold. No code change is needed.",
+    "Keys starting with '_' are ignored. Test locally: node .github/scripts/faa-risk-adapter.mjs --help"
   ],
-  "nonExecutablePatterns": [
-    "\\.(md|txt|rst|csv|svg|png|jpe?g|gif|ico|webp|pdf|zip|fpr|sarif|sqlite|db|log)$",
-    "(^|/)(node_modules|dist|build|coverage|specs|data|logs)/",
-    "^(Src|fortify-presales)/",
-    "(^|/)(package-lock\\.json|npm-shrinkwrap\\.json|yarn\\.lock|pnpm-lock\\.yaml)$"
+  "threshold": 5,
+  "rules": [
+    {
+      "name": "FAA explicitly requested by label",
+      "label": "faa-required",
+      "points": 5
+    },
+    {
+      "name": "Authentication or authorization code changed",
+      "paths": [
+        "(^|/)(auth|authentication|authorization|identity|permissions|roles)/",
+        "^packages/api/src/(middleware/(authenticateJwt|requireAuth|requireRole)|config/(passport|security)|utils/jwt)\\.ts$",
+        "^packages/api/src/services/(Auth|Mfa|User|Verification)Service\\.ts$"
+      ],
+      "points": 5
+    },
+    {
+      "name": "Secrets or credential handling changed",
+      "paths": [
+        "(^|/)(secrets|vault)/",
+        "(credential|secret|token)[^/]*\\.(ts|js|mjs|json)$",
+        "(^|/)\\.env($|\\.)"
+      ],
+      "points": 5
+    },
+    {
+      "name": "API changed",
+      "paths": ["^packages/api/src/api/", "(^|/)(openapi|swagger)[^/]*\\.(json|ya?ml)$"],
+      "points": 3
+    },
+    {
+      "name": "Dependency manifest changed",
+      "paths": ["(^|/)package\\.json$"],
+      "points": 2
+    },
+    {
+      "name": "Significant or predominant AI assistance declared",
+      "declaration": { "field": "AI assistance used", "values": ["significant", "predominant"] },
+      "points": 2
+    },
+    {
+      "name": "AI-generated code not manually reviewed",
+      "declaration": { "field": "AI-generated code manually reviewed", "values": ["no"] },
+      "points": 3
+    },
+    {
+      "name": "Security-sensitive change declared",
+      "declaration": { "field": "Security-sensitive code generated or modified", "values": ["yes"] },
+      "points": 3
+    },
+    {
+      "name": "Large change",
+      "minChangedLines": 500,
+      "points": 2
+    }
   ]
 }

@@ -26,14 +26,21 @@
 
 **Before submitting:** Replace every answer placeholder in this section and Security impact
 with exactly one listed value. Keep the field labels unchanged. Do not leave an HTML comment
-as an answer. Missing answers are recorded as unknown by the audit-only risk assessment;
-they are not treated as "no", and this template does not enforce completion.
+as an answer. Complete all declarations for human review; the template does not enforce
+completion.
 
 For assistance level, use `none` for no AI assistance, `low` for minor suggestions,
 `significant` for substantial assistance, or `predominant` when AI produced most of the change.
 For manual review, use `yes` only when a human has reviewed all AI-generated code in this PR,
 `no` if that review is incomplete, or `not-applicable` if there is no AI-generated code.
 An AI review or a passing test/scan is not human manual review.
+
+Configured risk criteria can select a PR-only differential FAA scan and import its results
+into the branch's FoD/SSC target. Findings remain report-only, not automatically accepted.
+Currently, FAA scoring uses only these declarations: significant/predominant AI assistance,
+AI-generated code not manually reviewed, and security-sensitive code changed. Other
+declarations provide context for human review but do not affect the FAA score. Missing or
+unrecognized answers do not add points or produce an `unknown` status.
 
 - AI assistance used: <!-- none | low | significant | predominant -->
 - AI tool: <!-- GitHub Copilot | other | none -->
@@ -43,7 +50,9 @@ An AI review or a passing test/scan is not human manual review.
 
 Answer for the entire PR, including CI workflows, scripts, credentials and trust boundaries,
 not only application code. If unsure, investigate or ask the author/reviewer rather than
-defaulting to `no`. Automated path evidence can override a negative declaration.
+defaulting to `no`. FAA path rules score independently: a negative declaration does not
+cancel points from matching changed paths. The current adapter does not check for conflicts
+between declarations and path evidence.
 
 - Security-sensitive code generated or modified: <!-- yes | no -->
 - Authentication or authorization changed: <!-- yes | no -->

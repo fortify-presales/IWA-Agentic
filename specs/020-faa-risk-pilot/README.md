@@ -1,437 +1,213 @@
-# FAA risk pilot runbook
+# Risk-based FAA PR demonstration
 
-## What is implemented
+## The example
 
-One dependency-free Node.js ES module assesses PR risk, writes JSON audit evidence and a Markdown
-summary, and publishes GitHub outputs. The workflow evaluates non-draft PRs into `main` on
-creation, updates, body edits, readiness, and label changes. When explicitly enabled, a separate
-job runs FAA only for mandatory, same-repository PR decisions using immutable base controls.
-Recommended decisions remain advisory. No results are imported into FoD/SSC and no production
-policy is enforced. Existing SAST/SCA workflows remain independent.
-A separate manual-only [differential smoke test](../../.github/workflows/faa-smoke-test.yml) can run
-FAA 26.4.0 against changes on `main` or the explicitly approved `feature/020-faa-risk-pilot`
-branch. It has no FoD integration.
+FAA runs as two extra jobs in the existing platform workflow:
+[fod.yml](../../.github/workflows/fod.yml) for FoD (default) or
+[scancentral.yml](../../.github/workflows/scancentral.yml) for SSC.
 
-### Full application scan triggers
+1. **`FAA-Risk-Summary` (Ubuntu, parallel with SAST in normal mode):** run the tests and the dependency-free
+   [risk adapter](../../.github/scripts/faa-risk-adapter.mjs). Publish the score,
+   `do_faa` boolean and exact `merge-base(base,head)..head` range.
+2. **`FAA-Scan` (existing FAA runner):** normally waits for both `Fortify-AST-Scan` and
+   `FAA-Risk-Summary`. Only for selected, same-repository, non-draft PRs, run the
+   [FoD](../../.github/custom-actions/fod/faa-scan.yaml) or
+   [SSC](../../.github/custom-actions/ssc/faa-scan.yaml) differential action against
+   the branch target, using existing platform findings as complementary context.
+   Import the SARIF into that platform and retain the FAA reports in GitHub.
 
-The FoD and ScanCentral workflows use positive path filters for package files (excluding Markdown),
-root npm manifests/lockfile, TypeScript build configuration, npm configuration, and each scanner's
-workflow and custom actions. ScanCentral also includes its Debricked configuration. Documentation,
-specifications, PR templates, agent instructions and unrelated workflows alone do not trigger those
-full scans. Manual dispatch and existing branch restrictions remain unchanged; FAA assessment and
-smoke-test triggers are independent. PR filters consider the whole PR diff, not only its latest
-commit. If full scans become required checks, account for skipped workflows leaving checks pending.
-Each workflow's `CHECK_POLICY_ACTION` references its platform-specific policy file:
-`.github/custom-actions/fod/check-policy.yaml` or `.github/custom-actions/ssc/check-policy.yaml`.
+Release/application-version setup (owner, SDLC status, assessment type, issue template,
+copy-from, scan settings) is owned solely by the SAST job's `fortify/github-action`
+configuration; the FAA job never creates or configures a target. Normally FAA runs only
+after SAST succeeds. For a demo, set the repository variable `FAA_DEMO_ONLY` to `true`:
+on non-draft PRs this skips SAST and permits the risk-selected differential FAA job to use the
+existing branch target. That target must already exist; run normal SAST once for the
+branch before enabling demo-only mode. Unset the variable or set it to `false` to restore
+normal behavior. Push and manual runs still run SAST regardless of this variable.
+FAA only runs when the platform workflow's `pull_request` path filters match. Default
+`pull_request` activity types apply, so declaration or label edits take effect on the
+next push. There is no push, manual or full FAA scan.
 
-## Prerequisites and validation
+## Configurable criteria
 
-Node.js 20+ and Git are sufficient. No npm install, fcli, FAA, credentials, or application build
-is needed for assessment.
+Edit [faa-policy.json](../../.github/faa-policy.json), not the adapter. Its `_instructions`
+block explains the format. In short, it has one `threshold` and a list of `rules`. Each rule has a
+`name`, `points` and exactly one condition:
 
-From the repository root:
+- `label`: the PR has this label (`faa-required` is worth the full threshold, so it forces FAA).
+- `paths`: case-insensitive regular expressions matched against changed repository paths.
+- `declaration`: a `- <field>: <value>` answer in the PR body, from the existing PR template.
+- `minChangedLines`: added plus deleted lines in the PR are at least this number.
+
+Each matching rule adds its points once; FAA is selected when the score reaches the threshold.
+These are configurable heuristics, not semantic analysis. Declarations can only add risk.
+
+The adapter contains no repository-specific configuration. Copy it and a policy to another
+repository and adjust the rules; its header comment shows the workflow wiring and how to add
+a new rule type.
+
+## Configuration and destinations
+
+- Node 20+ and Git suffice for assessment.
+- The scan job uses `[self-hosted, Linux, X64, fortify, faa]`; change these labels for another runner.
+- FAA must already be installed/configured. The workflow sets up fcli 3.30.0 using the
+  official Fortify setup action; the custom actions register preinstalled FAA only.
+- `FAA_LICENSE_PLATFORM` is `fod` (default) or `ssc`; it selects which platform workflow
+  runs the FAA jobs, so a PR never gets two FAA scans.
+- `FAA_DEMO_ONLY` is unset/`false` by default. Set it to `true` to skip SAST on non-draft PRs and
+  run only risk-selected differential FAA scans against an existing branch target.
+- FoD: variable `FOD_URL`, secrets `FOD_CLIENT_ID` and `FOD_CLIENT_SECRET`.
+  `FOD_DEFAULT_OWNER` is used when supplied for application creation.
+- SSC: variable `SSC_URL`, secret `SSC_TOKEN`.
+- The existing provider uses secret `OPENAI_API_KEY`. FAA's external configuration controls
+  the provider, tools and spend limits; this workflow does not provision those.
+- Organization variables/secrets must grant this repository access. URLs are variables, not secrets.
+
+The target is **`<github.repository>:<github.head_ref>`**, the same name `fortify/github-action`
+uses for the SAST job. For example, a branch `demo/faa` in this repository
+uses `fortify-presales/IWA-Agentic:demo/faa`.
+
+The FoD action uses FAA's `--fod-release` integration, and the SSC action uses
+`--ssc-appversion`, to obtain existing findings directly from their respective platforms.
+Neither action downloads an FPR or starts or waits for a new SAST scan. Findings available
+at run time are used as complementary context. This is not a fallback to a full FAA scan.
+FoD SARIF processing is asynchronous; SSC waits for artifact processing.
+
+### Previous FAA SARIF
+
+The workflows also restore a prior FAA SARIF using GitHub's artifact API and
+`actions/download-artifact`. The shared
+[baseline helper](../../.github/scripts/faa-sarif-baseline.mjs) selects the newest eligible
+earlier successful run of the same workflow, backend, repository, PR and source branch.
+The prior source commit must be an ancestor of the current PR head, and the merge-base
+SHA must match the risk adapter's current FROM commit. Metadata in the artifact is checked
+again after download. Other PRs, retargeted bases, abandoned force-push heads, failed runs,
+expired artifacts and the current run (including earlier attempts) are not reused.
+
+The three inputs are independent:
+
+- `--differential FROM..TO` continues to determine the PR lines analyzed.
+- `--fod-release` / `--ssc-appversion` supplies complementary Fortify SAST findings.
+- Optional `--baseline previous-faa.sarif` reuses FAA finding instance IDs across drift.
+  In differential mode it does not carry forward all historical findings or change the range.
+
+The option was verified against `fortifyaa -help` for FAA 26.4.0, which lists
+`[--baseline <file>] (reuse a prior scan's instance-ids across drift)` and states that for
+`--differential <range>`, "`--baseline` is optional (adds instance-id continuity with a prior
+scan)". There is no `--previous-sarif` option.
+
+The restored file is `$RUNNER_TEMP/faa-previous/previous-faa.sarif`, outside the source
+checkout. Missing baselines are normal; discovery/download failures or invalid previous
+SARIF/metadata log a warning and scanning continues without `--baseline`. No empty baseline
+is generated. If the newest selected artifact is invalid, older artifacts are not tried.
+
+After the existing FAA scan and platform import succeed, the helper validates the nonempty
+SARIF 2.1.0 report at `$RUNNER_TEMP/faa-output/faa.sarif` and writes `faa-baseline.json`
+with repository, PR, branch, workflow, full FROM/TO SHAs, run ID and attempt. These two files
+are uploaded as an immutable, run-specific artifact:
+`faa-sarif-<backend>-pr<PR>-<FROM>-<TO>-<run-ID>-<attempt>`.
+Retention remains 14 days, matching the existing report artifacts. A failed scan or invalid
+current report cannot publish a reusable baseline. Existing always-uploaded diagnostic
+reports remain separate and are never selected as baselines.
+
+Only artifacts with this metadata contract are eligible: the first run after this update
+seeds a baseline; a subsequent successful PR run can reuse it. A changed merge base also
+starts a new baseline. Artifact discovery requires `actions: read` on the FAA job; no write
+permission is added.
+
+Each FAA job only receives its own platform's credentials. Named fcli sessions are logged
+out on ordinary completion/failure. The FoD/SSC session name is also passed explicitly to
+FAA's `--fcli-fod-session` / `--fcli-ssc-session` option for native platform-findings lookup.
+The old `FAA_PR_SCANS_ENABLED` variable is no longer
+used: selection is driven directly by the configured criteria.
+
+## Adapter interface
 
 ```powershell
-node --test .github\tests\faa-risk-adapter.test.mjs .github\tests\faa-smoke-test.test.mjs .github\tests\faa-pr-scan.test.mjs
+node .github\scripts\faa-risk-adapter.mjs --event C:\temp\pr-event.json --source C:\temp\pr-source --policy .github\faa-policy.json --output C:\temp\faa-risk
+```
+
+`--event` defaults to `GITHUB_EVENT_PATH`; `--policy` defaults to the policy beside the
+script's parent directory. The source checkout must be at the event's head SHA and contain
+the base history. Required event fields are `pull_request.{number,body,labels,base.sha,base.repo.id,head.sha}`;
+`head.repo.id` must match `base.repo.id` for `do_faa=true`.
+
+Outputs written after successful assessment:
+
+- `faa-risk-result.json`: score, threshold, matched rules with evidence, range and `doFaa`.
+- `faa-risk-summary.md`: human-readable evidence.
+- `GITHUB_OUTPUT`: `score`, `do_faa`, `change_range`.
+
+Below-threshold scores, forks and deletion-only diffs do not select FAA.
+Draft PRs are skipped by the workflow.
+
+fcli 3.30.0's built-in `ci` action **does not implement `DO_FAA`**. The example therefore
+uses `if: needs.FAA-Risk-Summary.outputs.do_faa == 'true'` to gate a direct custom-action invocation,
+rather than setting an ignored environment variable or copying the built-in CI action.
+The same output can feed `DO_FAA` when a future CI integration supports it.
+
+Both platform actions require `--source-dir` (or `SOURCE_DIR`). They support two modes:
+
+- **PR differential:** supply `--pr-number` and `--change-range` together (or
+  `FAA_PR_NUMBER`, `FAA_CHANGE_RANGE`). Only two distinct full commit SHAs are accepted
+  for the merge-base..head range. `--scope` optionally narrows the changed files.
+- **Scope-only:** omit both PR options and supply `--scope` (or `FAA_SCOPE`). FAA scans
+  all selected files, not just changed lines. Ensure `FAA_PR_NUMBER` and `FAA_CHANGE_RANGE`
+  are unset when using this mode. This mode is available for direct action use only;
+  the existing GitHub workflows remain PR differential scans.
+
+The target comes from `--rel` / `FOD_RELEASE` or `--av` / `SSC_APPVERSION`.
+Arbitrary extra scan options are unavailable. For example, with an authenticated fcli
+session and FAA already configured, scan all application files:
+
+```powershell
+fcli fod action run .github\custom-actions\fod\faa-scan.yaml --source-dir "$PWD" --scope "$PWD\packages" --rel "<existing-release>"
+fcli ssc action run .github\custom-actions\ssc\faa-scan.yaml --source-dir "$PWD" --scope "$PWD\packages" --av "<existing-app:version>"
+```
+
+These commands import/upload results to the specified target. Neither action runs SAST.
+The optional `--baseline` action option defaults to `FAA_PREVIOUS_SARIF` and is omitted
+from the FAA command when no validated previous report was restored. The optional `--scope`
+option defaults to `FAA_SCOPE`; both workflows set it to `<workspace>/packages`, so only
+changed application files under `packages/` are analysed. `-scan` stays at the repository
+root because `--differential` needs the Git repository.
+
+## Validation and demonstration
+
+```powershell
+node --test .github\tests\faa-risk-adapter.test.mjs .github\tests\faa-sarif-baseline.test.mjs
+fcli fod action help .github\custom-actions\fod\faa-scan.yaml
+fcli ssc action help .github\custom-actions\ssc\faa-scan.yaml
 git --no-pager diff --check
 ```
 
-For a local assessment, provide a saved GitHub PR event and a separate Git checkout whose HEAD is
-the event's head SHA and whose history contains the base SHA. Execute trusted controls, not a
-script from that source checkout:
-
-```powershell
-node .github\scripts\faa-risk-adapter.mjs --event C:\temp\pr-event.json --source C:\temp\pr-source --output C:\temp\faa-evidence
-```
-
-The policy path is fixed relative to the executed module, not selectable by the PR event.
-Required event fields are `repository.id`, `repository.full_name`, and
-`pull_request.{number,draft,body,labels,base.sha,base.repo.id,head.sha}`.
-Execution selection additionally requires `head.repo.id`; missing or different identity is treated
-as a fork and never credential-scanned. Automatic scans require `base.ref=main`.
-The repository name must match the policy, and `base.repo.id` must match `repository.id`.
-Drafts fail local invocation explicitly; automatic assessment skips drafts.
-
-Outputs:
-
-- `faa-risk-result.json`: policy version/hash, repository identity, SHAs, assessment ID, scoring
-  reasons/evidence, static metadata provenance, declaration issues/conflicts, unevaluated signals,
-  and explicit FAA execution status.
-- `faa-risk-summary.md`: bounded summary with full evidence retained in JSON.
-- `GITHUB_OUTPUT`: `score`, `mandatory`, `decision`, `execute_faa`, only after successful assessment.
-
-The recorded control SHA is the actual checkout containing the executing module. Local uncommitted
-changes are not proof of a protected revision; CI additionally verifies that control SHA equals the
-event's base SHA. The policy hash identifies the exact policy bytes.
-
-## Trust and activation
-
-The `pull_request_target` workflow executes only controls from the base SHA. A separate, credential-free
-head checkout is data for Git and FAA; the workflow never imports, builds, installs, or executes its
-scripts. Git external diffs and text conversion are disabled. Hosted assessment has only
-`contents: read` and no Fortify secrets. The selected self-hosted job additionally has
-`pull-requests: read` for freshness checks, with Fortify/OpenAI credentials limited to its execution
-step. The helper removes its GitHub API token before starting FAA. No job has PR write permission
-or publishes to GitHub code scanning.
-
-Merge the tooling through normal review before evaluating later PRs: PR changes to workflow/scorer/
-policy intentionally cannot assess themselves with modified controls. Manual dispatch of the
-assessment workflow runs tests only, not a fabricated PR assessment. The GitHub workflows must still be validated after
-merge; local tests do not establish that a hosted run succeeded.
-
-Current action major tags follow repository conventions. Immutable action pins, actual CODEOWNERS,
-and protected-branch review rules must be confirmed before treating this as an enforced security control.
-The initial workflow retains artifacts for 14 days; confirm retention/access policy before rollout.
-In public repositories, summaries/artifacts may be accessible to others: assessment evidence contains paths and
-declarations, never source contents or secrets. Do not use this pilot to collect confidential metadata.
-
-## Policy and interpretation
-
-[The policy](../../.github/faa-policy.json) is audit-only. Its tier-2, internet-facing, internal-data
-classification is an explicit **pilot assumption**, not approved application metadata.
-Internet exposure adds a standing +4; therefore documentation-only changes score 4, while a
-predominantly AI-assisted change adds +2 and reaches the recommendation threshold. With neutral
-test metadata, AI alone scores 2 and does not invoke FAA. A tier-1/restricted profile can reach
-mandatory on metadata alone. Do not bypass these effects with undocumented special cases.
-
-Patterns are case-insensitive JavaScript regular expressions against repository-relative Git paths.
-Map the real services/middleware, not just directories named `auth`. Every logical signal scores once,
-even with several paths and a declaration. API path changes are a conservative proxy for material
-change: this milestone cannot determine whether an API was actually introduced or changed semantically.
-An API signal plus internet exposure is mandatory. Auth/secrets/incident signals and `faa-required`
-are mandatory regardless of total score. A numerical score of at least 9 also sets `mandatory=true`.
-
-Executable lines are additions plus deletions from the merge-base-to-head diff, excluding configured
-non-executable paths. Rename evidence includes both paths; pure renames add no lines. Binary paths
-still trigger path/dependency signals but add no lines. `.gitattributes` can affect Git's binary
-classification; line counts are a heuristic, not a content-aware security boundary.
-Root `Src/` packaging copies are excluded from size only, not actual `packages/*/src/` files.
-Lock-file changes still add dependency risk. Thresholds are inclusive: 500 lines in matched
-high-risk files or 1500 executable lines overall. A positive sensitive-change declaration
-conservatively treats all executable changes as high-risk because their location is unknown.
-
-Leave PR template labels intact and replace HTML comments with an allowed value. Unanswered or
-unrecognized answers remain `unknown` and appear in audit evidence; they are not verified `no`
-answers. Duplicate declarations fail. Automated paths override `no`. A sensitive-data-processing
-declaration is recorded but does not infer a trusted classification. Removing a label does not
-override path/declaration evidence. Assessment labels/body remain an event snapshot. The selected
-execution job checks current GitHub PR metadata before and after scanning; stale events are not
-silently reassessed as a newer PR revision. Use a new PR update/label event to reassess current state.
-
-## Conditional mandatory PR scans
-
-The [implementation specification](../021-faa-pr-execution/spec.md) extends the existing
-[risk workflow](../../.github/workflows/faa-risk-assessment.yml); it does not use a privileged
-`workflow_run` or trust an artifact supplied by a PR.
-Hosted helper tests run on `ubuntu-latest` only; no OS matrix is required for this Linux pilot.
-
-### Prove the chain before merging PR 26
-
-The existing manual risk-workflow dispatch tests candidate helpers but intentionally skips live
-assessment/scanning. To prove actual risk selection and FAA execution before merging PR 26,
-review the temporary `bootstrap/faa-pr26-launcher` branch and its
-`.github/workflows/faa-pr-premerge-validation.yml` separately.
-
-The bootstrap must be based on main and contain a literal approved helper SHA, not a mutable
-branch or a user-selectable control ref. It is fixed to PR 26. Its candidate controls and source
-head must match that exact SHA, in separate checkouts. A narrowly guarded, library-only validation
-entry point permits this approved revision for manual dispatch from main; the normal PR CLI
-continues to require base controls. This validates the real helper and current PR metadata without
-pretending the dispatch is a `pull_request_target` event.
-
-1. Review the added helper validation support and candidate changes. Publish the exact candidate
-   commit only after human review; review the bootstrap's literal pin against it. Changes to PR 26
-   after pinning require re-review and a new pin.
-2. Publish and merge **only the bootstrap PR** into main. Do not merge PR 26 yet. Its own trusted
-   launcher, not the unmerged feature workflow, is now available.
-3. Confirm `FAA_PR_SCANS_ENABLED=true`, the existing runner/licensing/provider settings and spend
-   approval. The manual launch requires explicit consent and can incur FAA/LLM charges:
-
-   ```powershell
-   gh workflow run faa-pr-premerge-validation.yml --repo fortify-presales/IWA-Agentic --ref main -f run_faa=true
-   ```
-
-4. Require the Ubuntu helper tests to pass, then inspect the self-hosted run. The bootstrap first
-   fetches the real open PR snapshot and refuses an unapproved head. Risk is recomputed by the
-   pinned helper; only a mandatory decision invokes FAA.
-5. In the retained artifact, inspect `faa-risk-result.json` for score, mandatory decision, reasons,
-   policy hash and assessment identity. Inspect `faa-pr-execution.json` for
-   `executionContext: premerge-validation`, `triggerEvent: workflow_dispatch`, the actual
-   `launcherSha` on main, candidate `controlSha`/`headSha`, actual PR `baseSha`, merge-base range,
-   analyzer invocation/exit, status and findings. Require valid SARIF and nonempty FAA Markdown for
-   a completed scan; skipped or stale execution is not proof of scanning. The bootstrap job fails
-   explicitly if the helper does not record `succeeded`, without forcing an advisory scan.
-
-This is an explicit trust exception for a reviewed immutable candidate, not an independent sandbox
-or a generic arbitrary-PR scanner. The later automatic base-controlled PR event path still needs
-post-merge verification. Remove the temporary launcher/validation exception after the pilot.
-
-### Activation and first live verification
-
-1. Review and merge the new controls first. This introducing PR cannot exercise its own changed
-   `pull_request_target` controls; its base still contains the previous implementation.
-2. Confirm the existing FAA runner, selected licensing backend and LLM settings described below.
-   The workflow uses `[self-hosted, Linux, X64, fortify, faa]` and Node 20. FAA **26.4.0** must
-   already be installed/configured for that runner account; no app install or build is needed.
-3. Explicitly enable the repository variable `FAA_PR_SCANS_ENABLED` with the exact value `true`.
-   Leave it unset or set it to `false` to retain assessment-only behavior:
-
-   ```powershell
-   gh variable set FAA_PR_SCANS_ENABLED --repo fortify-presales/IWA-Agentic --body true
-   ```
-
-4. On a subsequent reviewed, same-repository, non-draft PR into `main` with scannable changes,
-   complete the PR declarations and add `faa-required` if a deterministic mandatory case is needed.
-   This is a paid FAA execution; obtain the demo owner's approval before triggering it.
-5. Verify the hosted assessment and self-hosted job. In the retained `faa-pr-...` artifact, require
-   `faa-pr-execution.json` to record the exact expected `baseSha`, `headSha`, `controlSha`,
-   `diffBaseSha`, assessment/run/attempt/build identity, `analyzerInvoked: true`,
-   `analyzerExitCode: 0`, and `status: succeeded`. Require valid `faa.sarif` and a nonempty
-   `faa-summary.md`. Inspect FAA's actual file coverage; candidate scope is not proof of coverage.
-6. Verify real advisory/low-risk and disabled skip cases separately. Local tests use fake FAA
-   executors, not live service/model access. Disable the variable again when the demo ends:
-
-   ```powershell
-   gh variable set FAA_PR_SCANS_ENABLED --repo fortify-presales/IWA-Agentic --body false
-   ```
-
-Selection evidence is in `faa-risk-result.json`:
-
-| Selection status | Meaning |
-|------------------|---------|
-| `not-selected` | Below recommendation |
-| `advisory-only` | Recommended, never automatically scanned |
-| `skipped-fork` | Mandatory but not same-repository; no credential scan |
-| `disabled` | Mandatory but opt-in is absent |
-| `pending-execution` | Mandatory and eligible; this is not evidence that FAA ran |
-
-### Execution boundary and evidence
-
-The scan helper is loaded only from `controls/` at the event's full base SHA. `source/` is checked
-out at the assessed full head SHA with credentials not persisted, submodules disabled and no
-installation/build. The helper verifies distinct non-nested checkouts, clean controls/source,
-rejects tracked symlinks/submodules, and recomputes risk using the base policy. A fork cannot
-select scanning. The analyzer uses the trusted controls as its working directory and the absolute
-source root as both scan input and scope, so tooling-only PR changes are eligible too.
-
-The differential range is `merge-base(base,head)..head`, including when the base has advanced on a
-diverged branch. Deleted-only/no-scannable ranges record `skipped-no-changes` without invoking FAA.
-Each attempt has a unique `github-pr-<repository-id>-<run-id>-<attempt>` build ID.
-No full-scan fallback, FoD/SSC import, baseline update or release gating is introduced.
-
-Current GitHub metadata must match repository identity, PR number, open/non-draft state,
-`main` target, base/head SHAs and body/labels. A mismatch before scanning records `skipped-stale`.
-A mismatch after scanning records `stale`, not `succeeded`. Source changes during analysis,
-GitHub API errors, analyzer errors and malformed/missing outputs fail explicitly. Nonzero findings
-do not fail an otherwise completed audit scan. Read the execution record, not just a green job:
-explicit skips/stale outcomes can complete without an error exit.
-
-The execution record and `faa-pr-execution-summary.md` include status, SHAs, assessment identity,
-duration, analyzer invocation/exit and finding count when available. Evidence is retained for
-14 days; available outputs are uploaded on ordinary helper/analyzer failure. Concurrency cancels older PR runs.
-Cancellation, timeout or runner loss can prevent final evidence; no such run attests a newer head.
-Disabling the variable does not terminate an already-running analyzer; cancel that run separately.
-
-### Demo limitations
-
-The owner approved the existing self-hosted demo runner without adding environment/branch
-protections. `main` was unprotected at implementation time: immutable revision selection is not
-independent control-owner authorization. This workflow does not sandbox FAA or the LLM's tools.
-PR contents and instructions are untrusted; trusted external FAA policy must constrain tools,
-network access, prompts, model limits and spend. A timeout is not a spending limit.
-
-The legacy manual smoke workflow still permits mutable `feature/020-faa-risk-pilot` controls.
-Its previously reported Critical Build Script Injection is **not resolved or automatically accepted**
-by adding this separate PR path. Keep its explicit owner disposition/follow-up independent.
-Do not treat these demo controls as production runner isolation or a security approval.
-
-## Manual FAA differential smoke test
-
-The registered runner `aws-ubuntu-runner-01` has labels `self-hosted`, `Linux`, `X64`, `fortify`, and
-`faa`. The workflow selects those labels, not the runner name; any matching runner can receive it.
-The runner must provide Git and FAA **26.4.0** on PATH, with its provider/model, service/license
-access, and network access already configured for the runner service account. `actions/setup-node`
-provisions Node 20; no application dependencies are installed. This workflow does not provision
-fcli, log into FoD/SSC, or run a live self-test. It maps existing Actions settings explicitly
-for FAA's license validation; settings consumed by `fortify/github-action` are not automatically
-exported when running FAA directly.
-
-### FoD or SSC licensing configuration
-
-Set the repository variable `FAA_LICENSE_PLATFORM` to `fod` or `ssc` (lowercase). If unset or
-empty, the workflow uses `fod`, matching the pilot preference. This selector does not change
-the differential scan mode or introduce platform scans/imports.
-
-Reuse these Actions settings; shared organization settings must grant this repository access:
-
-| Backend | Actions setting | Type | FAA environment variable |
-|---------|-----------------|------|--------------------------|
-| FoD | `FOD_URL` | Variable | `FCLI_DEFAULT_FOD_URL` |
-| FoD | `FOD_CLIENT_ID` | Secret | `FCLI_DEFAULT_FOD_CLIENT_ID` |
-| FoD | `FOD_CLIENT_SECRET` | Secret | `FCLI_DEFAULT_FOD_CLIENT_SECRET` |
-| SSC | `SSC_URL` | Variable | `FCLI_DEFAULT_SSC_URL` |
-| SSC | `SSC_TOKEN` | Secret | `FCLI_DEFAULT_SSC_TOKEN` |
-
-Keep credentials in secrets, not variables or workflow files. Only the selected backend is
-provided to the FAA step; the helper also removes inherited `FCLI_DEFAULT_*` settings for the
-other backend from FAA's child environment before both `-help` and `-scan`. FAA rejects mixed
-FoD/SSC namespaces, so unused keys are removed entirely, not merely set to empty strings.
-Missing selected settings and invalid selectors fail
-before invoking FAA, naming the missing setting without printing its value.
-Credentials are not command-line arguments or execution-record fields. The selector is recorded
-as configuration, not proof that license validation or scanning succeeded.
-
-If FAA still reports that license validation is required, validate the selected Fortify
-configuration under the runner service account using `fortifyaa -license` before retrying.
-Do not copy tokens or license-cache contents into logs, artifacts or this repository.
-
-### LLM provider authentication
-
-Fortify licensing and LLM authentication are independent. The runner's external FAA policy
-selects the agent, provider, models and cost limits. For its configured OpenAI provider, the
-workflow maps the existing Actions secret `OPENAI_API_KEY` into the FAA step only; organization
-secret access must include this repository. The helper forwards it through the child environment,
-never through arguments or execution records.
-
-Other providers require their own approved configuration or a credential store initialized with
-`fortifyaa -pilogin` under the runner service account. This workflow does not select a different
-provider or perform an interactive login if credentials are unavailable.
-
-### Historical: test the feature branch before merging the pilot
-
-GitHub requires a `workflow_dispatch` workflow to exist on the default branch before it can be
-dispatched on another ref. Register the dispatcher without merging the full pilot:
-
-1. In a separate branch based on `main`, add only a harmless
-   `.github/workflows/faa-smoke-test.yml` registration stub. It must declare `workflow_dispatch`
-   and the optional string input `base_sha`, matching the feature workflow. Its only job prints
-   a registration notice on a GitHub-hosted runner: no checkout, FAA, self-hosted runner, secrets,
-   or FoD access. Review and merge this one-file bootstrap PR into `main`.
-2. Incorporate the bootstrap commit into `feature/020-faa-risk-pilot` before publishing the pilot.
-   Keep the full feature version of the same workflow, replacing the stub. If the pilot was already
-   committed, resolve any add/add conflict by keeping that full version; do not merge the pilot
-   into `main` yet.
-3. Run the local helper/scoring tests below, then commit and push the reviewed feature changes.
-   The workflow, helper and tests must exist on the remote feature branch.
-4. Choose a full 40-character ancestor SHA whose range includes
-   added/modified/copied/renamed/type-changed files under `packages/`.
-   A tooling-only pilot commit has no package changes against its first parent, so supply an earlier
-   source base rather than adding artificial application changes. Inspect history with
-   `git log --format="%H %s" -- packages` and review `git diff --stat <base-sha>..HEAD -- packages`.
-   Revision expressions, branches, non-ancestor bases, no-op and deletion-only ranges are rejected.
-5. Dispatch the feature version explicitly, substituting the reviewed SHA:
-
-   ```powershell
-   gh workflow run faa-smoke-test.yml --repo fortify-presales/IWA-Agentic --ref feature/020-faa-risk-pilot -f base_sha=<base-sha>
-   gh run list --repo fortify-presales/IWA-Agentic --workflow faa-smoke-test.yml --branch feature/020-faa-risk-pilot --event workflow_dispatch --limit 5
-   ```
-
-   Alternatively, select **feature/020-faa-risk-pilot**, not **main**, in
-   **Actions > FAA Differential Smoke Test > Run workflow**.
-6. Confirm the run's branch and exact head SHA. The hosted validation job must pass before the
-   self-hosted scan job runs. Download the `faa-smoke-...` artifact and check that
-   `faa-execution.json` records the feature ref, expected SHAs/range, `analyzerInvoked: true`,
-   `analyzerExitCode: 0`, and `status: succeeded`, with valid SARIF and a nonempty FAA summary.
-   A successful registration-only job on `main` is **not** evidence of FAA execution.
-7. Only after a successful real branch smoke run, merge the complete pilot through its normal PR.
-   Until then, leave assessment policy/scorer/helper code off `main`.
-
-The full workflow permits only `main` and the named pilot branch in `fortify-presales/IWA-Agentic`;
-other branches, tags, PR refs and forks are rejected. After merging the pilot, a dispatch from
-`main` runs the full workflow; a blank `base_sha` uses the dispatched commit's first parent.
-
-### Pre-merge validation of PR 25
-
-Select `scan_target=pilot` and supply PR 25's exact current base SHA. Only the approved feature
-branch may use this target. The hosted job checks the current PR head/base, runs the normal smoke
-tests, validates four controlled scoring scenarios, and assesses the actual PR using the branch's
-under-review controls. It retains `faa-premerge-risk-...` evidence. This does **not** exercise
-the future `pull_request_target` trust boundary; test that separately after merge.
-
-After hosted validation succeeds, FAA scans only added/modified/copied/renamed/type-changed
-allowlisted pilot scripts and workflows in the base-to-head diff. It records the actual scope and
-changed-file count. YAML is included as a candidate, but presence in the `--scope` argument is not
-proof that FAA analyzed it; inspect FAA's own logs and outputs. No arbitrary scope is accepted.
-Dispatch only reviewed code with an approved runner policy and spend limit.
-
-```powershell
-gh workflow run faa-smoke-test.yml --repo fortify-presales/IWA-Agentic --ref feature/020-faa-risk-pilot -f scan_target=pilot -f base_sha=<PR-base-sha>
-```
-
-The default `scan_target=packages` retains the existing package smoke-test behavior. The scan mode
-remains differential only:
-
-```text
-fortifyaa -scan <checkout> --scope <packages-or-allowlisted-changed-pilot-files> --differential <base-sha>..<dispatched-sha>
-  --output <artifacts>/faa.sarif --output-format sarif,md-summary
-  --output-md-summary <artifacts>/faa-summary.md --message-format plain
-  -b github-<repository-id>-<run-id>-<attempt>
-```
-
-`--differential` reports issues introduced on changed lines. There is no full-scan fallback,
-`--incremental`, required baseline, complementary FoD/SSC input, or baseline update. The helper
-checks the exact HEAD, base ancestry, clean selected paths, and FAA version before scanning.
-No application build or application startup is run by the workflow.
-
-Each attempt has a unique build ID so a persistent runner cannot automatically resume another
-attempt's FAA state. Runs are not automatically cancelled by later dispatches. A 60-minute job
-timeout bounds runner time, not LLM spend; configure cost/model limits in the runner's trusted FAA
-policy. FAA state under the runner account is not globally cleaned; manage its retention separately.
-
-Artifacts, retained for 14 days:
-
-- `faa.sarif`: FAA findings (zero findings is a valid result).
-- `faa-summary.md`: FAA's Markdown summary.
-- `faa-execution.json`: dispatched ref, configured license backend, range, exact SHAs, run/attempt/build identity, version, scan invocation,
-  analyzer exit status, duration, and success/failure.
-- `faa-execution-summary.md`: concise workflow summary.
-
-Nonzero analyzer exits and missing/malformed required outputs fail the job. The execution record
-is retained on ordinary helper/analyzer failures; cancellation, timeout, or runner loss may prevent
-finalization. Available artifacts are uploaded on failure. No successful result is synthesized.
-Tests never invoke a real FAA process.
-
-FAA artifacts can contain code snippets and sensitive findings; restrict repository/artifact access
-and confirm retention before use. Dispatch is not a sandbox: use a dedicated least-privilege runner,
-review changes on both allowed branches before dispatch, and govern FAA agent capabilities through its external policy.
-Do not extend this job to forks or arbitrary PR branches on a persistent/shared runner.
-
-### Verified feature-branch smoke run
-
-[Run 44138006070](https://github.com/fortify-presales/IWA-Agentic/actions/runs/44138006070)
-completed successfully on `aws-ubuntu-runner-01` with FAA **26.4.0**, FoD licensing and the
-configured OpenAI provider. All 12 hosted helper tests passed.
-
-- Scanned head: `e437597c24478f7c284d37d54b0d9347851403fa`.
-- Base: `25a47cac029e3d78cf9e56eb78f736325ef060d1`.
-- Mode/scope: differential, `packages`; one changed file, `packages/web/src/publicPages.tsx`.
-- Execution: analyzer invoked, exit 0, `status: succeeded`, duration 48,058 ms.
-- Outputs: SARIF 2.1.0 from `FORTIFY_AA 26.4.0` and a nonempty FAA Markdown summary;
-  zero findings. Logs confirmed plan/analysis/validation model stages.
-- Artifact: `faa-smoke-e437597c24478f7c284d37d54b0d9347851403fa-44138006070-1`.
-
-The repository selector is explicitly `FAA_LICENSE_PLATFORM=fod`. SSC licensing is covered by
-fake-executor tests, not a live SSC run. This narrow differential result is not a full application
-security assessment and does not imply the application's existing intentional vulnerabilities
-are absent. Subsequent documentation-only evidence commits do not change the scanned tooling
-or application code. At that run's date, only the dispatcher bootstrap was merged. The complete
-pilot subsequently merged through [PR 25](https://github.com/fortify-presales/IWA-Agentic/pull/25).
-
-## Deferred FoD and other milestones
-
-The manual smoke test remains independent of risk scoring and does not update PR assessments.
-Conditional mandatory execution is described above; a pending selection is not execution evidence.
-
-After verifying a real smoke run, separately confirm source/import release IDs and approved
-non-interactive FoD authentication before implementing import into a dedicated release.
-Live Fortify metadata, baseline credit, suppression
-detection, release gates, exceptions, PR comments, and effectiveness dashboards remain out of scope.
-
-### Smoke-test helper validation
-
-```powershell
-node --test .github\tests\faa-smoke-test.test.mjs .github\tests\faa-risk-adapter.test.mjs .github\tests\faa-pr-scan.test.mjs
-node --check .github\scripts\faa-smoke-test.mjs
-```
-
-These are local tests, not evidence that the remote runner's FAA configuration works.
+Use a same-repository, non-draft PR with a real added/modified file and completed declarations.
+Adding the configured `faa-required` label is a deterministic selection case; no artificial
+application vulnerability is necessary. Check the exact range in `faa-risk-result.json`,
+the fcli scan/import step result, and the platform's **branch** target.
+The `faa-scan-<PR>` artifact (`faa-scan-ssc-<PR>` for SSC) contains `faa.sarif` and
+`faa.sarif.md`; the risk artifact is separate.
+Below-threshold cases should retain risk evidence with the scan job skipped.
+No skipped, cancelled or test-only job proves FAA execution.
+To prove baseline reuse, push two successive risk-selected changes on the same PR without
+changing its merge base. The first run publishes the scoped baseline artifact; after it
+finishes successfully, the second run should log `FAA previous SARIF available: true`
+and invoke FAA with `--baseline`. Its FROM/TO range still comes from the risk adapter.
+
+Findings are report-only, not a release gate. Importing or reporting a finding does not
+resolve it, suppress it or record risk acceptance. Artifacts are retained for 14 days and
+may contain code snippets; consider access/retention when copying this public demo.
+
+## Demo trust boundary
+
+This is an example for **trusted same-repository contributors**, not an independent security
+control over hostile PR authors. The workflow, scorer, policy and custom actions come from
+the PR revision; changing them can change what runs. Forks never reach the credentialed job.
+Credentials are limited to the scan step; checkout credentials are not persisted.
+Superseded PR runs are not cancelled automatically; an import already submitted is not undone.
+
+FAA is an agent processing PR content. Its external tool/network restrictions, model limits
+and runner isolation are not established by this workflow; a timeout is not a spending cap.
+Use a dedicated least-privilege runner and review CI/control changes before triggering scans.
+The earlier Critical Build Script Injection finding still needs explicit owner disposition:
+retiring its old launcher is not a claim of formal risk acceptance or a general trust-boundary fix.
