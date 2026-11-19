@@ -62,5 +62,7 @@ Do not add `Co-authored-by` trailers or AI co-author attribution to suggested or
   code is present.
 - If answers are unavailable, clearly identify the description as incomplete and list the
   unresolved declarations. Do not publish it as complete or replace unknown answers with `no`.
-- Keep these guidance rules distinct from enforcement: the current risk assessment is audit-only
-  and records unanswered declarations as unknown; it does not block PR submission or merging.
+- Keep these guidance rules distinct from selection: the risk assessment is audit-only and does
+  not block PR submission or merging. Only declarations configured in `.github/faa-policy.json`
+  can affect the FAA score; missing or unrecognized answers add no points and are not recorded
+  as `unknown`.
