@@ -125,7 +125,7 @@ jobs:
 
   # Risk-based FAA: score the PR, then run a differential FAA scan. In demo-only
   # mode the existing branch release is used without running SAST first.
-  FAA-Risk:
+  FAA-Risk-Summary:
     if: >-
       github.event_name == 'pull_request' && github.event.pull_request.draft == false &&
       (vars.FAA_LICENSE_PLATFORM || 'fod') == 'fod'
@@ -159,11 +159,11 @@ jobs:
           retention-days: 14
 
   FAA-Scan:
-    needs: [Fortify-AST-Scan, FAA-Risk]
+    needs: [Fortify-AST-Scan, FAA-Risk-Summary]
     if: >-
       !cancelled() &&
-      needs.FAA-Risk.result == 'success' &&
-      needs.FAA-Risk.outputs.do_faa == 'true' &&
+      needs.FAA-Risk-Summary.result == 'success' &&
+      needs.FAA-Risk-Summary.outputs.do_faa == 'true' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       (
         needs.Fortify-AST-Scan.result == 'success' ||
@@ -177,7 +177,7 @@ jobs:
     timeout-minutes: 60
     env:
       FAA_PLATFORM: fod
-      FAA_CHANGE_RANGE: ${{ needs.FAA-Risk.outputs.change_range }}
+      FAA_CHANGE_RANGE: ${{ needs.FAA-Risk-Summary.outputs.change_range }}
     permissions:
       contents: read
       actions: read

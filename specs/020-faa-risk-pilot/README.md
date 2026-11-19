@@ -6,11 +6,11 @@ FAA runs as two extra jobs in the existing platform workflow:
 [fod.yml](../../.github/workflows/fod.yml) for FoD (default) or
 [scancentral.yml](../../.github/workflows/scancentral.yml) for SSC.
 
-1. **`FAA-Risk` (Ubuntu, parallel with SAST in normal mode):** run the tests and the dependency-free
+1. **`FAA-Risk-Summary` (Ubuntu, parallel with SAST in normal mode):** run the tests and the dependency-free
    [risk adapter](../../.github/scripts/faa-risk-adapter.mjs). Publish the score,
    `do_faa` boolean and exact `merge-base(base,head)..head` range.
 2. **`FAA-Scan` (existing FAA runner):** normally waits for both `Fortify-AST-Scan` and
-   `FAA-Risk`. Only for selected, same-repository, non-draft PRs, run the
+   `FAA-Risk-Summary`. Only for selected, same-repository, non-draft PRs, run the
    [FoD](../../.github/custom-actions/fod/faa-scan.yaml) or
    [SSC](../../.github/custom-actions/ssc/faa-scan.yaml) differential action against
    the branch target, using existing platform findings as complementary context.
@@ -140,7 +140,7 @@ Below-threshold scores, forks and deletion-only diffs do not select FAA.
 Draft PRs are skipped by the workflow.
 
 fcli 3.30.0's built-in `ci` action **does not implement `DO_FAA`**. The example therefore
-uses `if: needs.FAA-Risk.outputs.do_faa == 'true'` to gate a direct custom-action invocation,
+uses `if: needs.FAA-Risk-Summary.outputs.do_faa == 'true'` to gate a direct custom-action invocation,
 rather than setting an ignored environment variable or copying the built-in CI action.
 The same output can feed `DO_FAA` when a future CI integration supports it.
 
