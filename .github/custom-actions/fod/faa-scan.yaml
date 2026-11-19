@@ -7,6 +7,9 @@ usage:
     This action runs FAA only for an explicit PR and merge-base..head commit range,
     and imports the differential SARIF results to the specified FoD branch release.
     There is no full-scan mode or arbitrary scan-options passthrough.
+
+    An optional --baseline SARIF preserves FAA finding instance IDs across runs.
+    It is independent of the Git differential and existing Fortify findings.
     
     FAA obtains the existing findings for the specified FoD release directly from FoD
     (--fod-release) and uses them as complementary-analysis context, so that issues
@@ -52,6 +55,11 @@ cli.options:
       Release must already exist in FoD.
     required: true
     default: ${#env('FOD_RELEASE')}
+  baseline:
+    names: --baseline
+    description: Optional previous FAA SARIF; defaults to FAA_PREVIOUS_SARIF.
+    required: false
+    default: ${#env('FAA_PREVIOUS_SARIF')}
   faaOutput:
     names: --output, -o
     description: >-
@@ -88,10 +96,11 @@ steps:
           -scan "${cli.sourceDir}"
           --differential "${cli.changeRange}"
           --fod-release "${cli.release}"
+          ${#isNotBlank(cli.baseline) ? '--baseline "' + cli.baseline + '"' : ''}
           -o "${cli.faaOutput}"
           --output-format sarif,md-summary
           --output-md-summary "${cli.faaOutput}.md"
-          --message-format plain
+          --message-format fod
         stdout: collect
         stderr: collect
         on.success:

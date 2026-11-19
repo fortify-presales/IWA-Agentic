@@ -7,6 +7,9 @@ usage:
     This action runs FAA only for an explicit PR and merge-base..head commit range,
     and uploads the differential SARIF results to the specified SSC branch version.
     There is no full-scan mode or arbitrary scan-options passthrough.
+
+    An optional --baseline SARIF preserves FAA finding instance IDs across runs.
+    It is independent of the Git differential and existing Fortify findings.
     
     FAA obtains the existing findings for the specified SSC application version directly
     from SSC (--ssc-appversion) and uses them as complementary-analysis context, so that
@@ -49,6 +52,11 @@ cli.options:
       Application version must already exist in SSC.
     required: true
     default: ${#env('SSC_APPVERSION')?:#env('APP_VERSION')}
+  baseline:
+    names: --baseline
+    description: Optional previous FAA SARIF; defaults to FAA_PREVIOUS_SARIF.
+    required: false
+    default: ${#env('FAA_PREVIOUS_SARIF')}
   faaOutput:
     names: --output, -o
     description: >-
@@ -97,6 +105,7 @@ steps:
           -scan "${cli.sourceDir}"
           --differential "${cli.changeRange}"
           --ssc-appversion "${cli.appVersion}"
+          ${#isNotBlank(cli.baseline) ? '--baseline "' + cli.baseline + '"' : ''}
           -o "${cli.faaOutput}"
           --output-format sarif,md-summary
           --output-md-summary "${cli.faaOutput}.md"

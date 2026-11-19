@@ -32,6 +32,8 @@ on:
       - 'debricked-config.yaml'
       - '.github/workflows/scancentral.yml'
       - '.github/custom-actions/ssc/**'
+      - '.github/scripts/faa-sarif-baseline.mjs'
+      - '.github/tests/faa-sarif-baseline.test.mjs'
   push:
     branches: [ "main", "demo/fortify-remediate-ssc" ]
     paths:
@@ -153,7 +155,7 @@ jobs:
         with:
           node-version: '20'
       - name: Test risk criteria
-        run: node --test .github/tests/faa-risk-adapter.test.mjs
+        run: node --test .github/tests/faa-*.test.mjs
       - name: Assess PR risk
         id: risk
         env:
@@ -183,8 +185,12 @@ jobs:
       )
     runs-on: [self-hosted, Linux, X64, fortify, faa]
     timeout-minutes: 60
+    env:
+      FAA_PLATFORM: ssc
+      FAA_CHANGE_RANGE: ${{ needs.FAA-Risk.outputs.change_range }}
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -197,11 +203,39 @@ jobs:
           fcli: bootstrapped
         env:
           FCLI_BOOTSTRAP_VERSION: v3.30.0
+      - name: Find previous FAA SARIF
+        id: baseline
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const baseline = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/faa-sarif-baseline.mjs`);
+            await baseline.findPrevious({ github, context, core });
+      - name: Download previous FAA SARIF
+        id: download
+        if: steps.baseline.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.baseline.outputs.artifact_name }}
+          run-id: ${{ steps.baseline.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/faa-previous
+      - name: Validate previous FAA SARIF
+        id: previous
+        if: steps.baseline.outputs.run_id != ''
+        uses: actions/github-script@v7
+        env:
+          FAA_BASELINE_METADATA: ${{ steps.baseline.outputs.metadata }}
+          FAA_BASELINE_DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
+        with:
+          script: |
+            const baseline = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/faa-sarif-baseline.mjs`);
+            await baseline.restorePrevious({ context, core });
       - name: Run differential FAA and import results
         shell: bash
         env:
           FAA_PR_NUMBER: ${{ github.event.pull_request.number }}
-          FAA_CHANGE_RANGE: ${{ needs.FAA-Risk.outputs.change_range }}
+          FAA_PREVIOUS_SARIF: ${{ steps.previous.outputs.path }}
           SOURCE_DIR: ${{ github.workspace }}
           # Same application version the SAST job set up (fcli ci default: <repository>:<branch>)
           SSC_APPVERSION: ${{ format('{0}:{1}', github.repository, github.head_ref) }}
@@ -216,6 +250,22 @@ jobs:
           fcli ssc action run "$GITHUB_WORKSPACE/.github/custom-actions/ssc/faa-scan.yaml" \
             "$session_opt" --on-unsigned=ignore --output "$RUNNER_TEMP/faa-output/faa.sarif"
           cat "$RUNNER_TEMP/faa-output/faa.sarif.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate current FAA SARIF
+        id: current
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const baseline = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/faa-sarif-baseline.mjs`);
+            await baseline.saveCurrent({ context, core });
+      - name: Upload reusable FAA SARIF
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.current.outputs.artifact_name }}
+          path: |
+            ${{ runner.temp }}/faa-output/faa.sarif
+            ${{ runner.temp }}/faa-output/faa-baseline.json
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -83,6 +83,48 @@ Neither action downloads an FPR or starts or waits for a new SAST scan. Findings
 at run time are used as complementary context. This is not a fallback to a full FAA scan.
 FoD SARIF processing is asynchronous; SSC waits for artifact processing.
 
+### Previous FAA SARIF
+
+The workflows also restore a prior FAA SARIF using GitHub's artifact API and
+`actions/download-artifact`. The shared
+[baseline helper](../../.github/scripts/faa-sarif-baseline.mjs) selects the newest eligible
+earlier successful run of the same workflow, backend, repository, PR and source branch.
+The prior source commit must be an ancestor of the current PR head, and the merge-base
+SHA must match the risk adapter's current FROM commit. Metadata in the artifact is checked
+again after download. Other PRs, retargeted bases, abandoned force-push heads, failed runs,
+expired artifacts and the current run (including earlier attempts) are not reused.
+
+The three inputs are independent:
+
+- `--differential FROM..TO` continues to determine the PR lines analyzed.
+- `--fod-release` / `--ssc-appversion` supplies complementary Fortify SAST findings.
+- Optional `--baseline previous-faa.sarif` reuses FAA finding instance IDs across drift.
+  In differential mode it does not carry forward all historical findings or change the range.
+
+The option was verified against `fortifyaa -help` for FAA 26.4.0, which lists
+`[--baseline <file>] (reuse a prior scan's instance-ids across drift)` and states that for
+`--differential <range>`, "`--baseline` is optional (adds instance-id continuity with a prior
+scan)". There is no `--previous-sarif` option.
+
+The restored file is `$RUNNER_TEMP/faa-previous/previous-faa.sarif`, outside the source
+checkout. Missing baselines are normal; discovery/download failures or invalid previous
+SARIF/metadata log a warning and scanning continues without `--baseline`. No empty baseline
+is generated. If the newest selected artifact is invalid, older artifacts are not tried.
+
+After the existing FAA scan and platform import succeed, the helper validates the nonempty
+SARIF 2.1.0 report at `$RUNNER_TEMP/faa-output/faa.sarif` and writes `faa-baseline.json`
+with repository, PR, branch, workflow, full FROM/TO SHAs, run ID and attempt. These two files
+are uploaded as an immutable, run-specific artifact:
+`faa-sarif-<backend>-pr<PR>-<FROM>-<TO>-<run-ID>-<attempt>`.
+Retention remains 14 days, matching the existing report artifacts. A failed scan or invalid
+current report cannot publish a reusable baseline. Existing always-uploaded diagnostic
+reports remain separate and are never selected as baselines.
+
+Only artifacts with this metadata contract are eligible: the first run after this update
+seeds a baseline; a subsequent successful PR run can reuse it. A changed merge base also
+starts a new baseline. Artifact discovery requires `actions: read` on the FAA job; no write
+permission is added.
+
 Each FAA job only receives its own platform's credentials. Named fcli sessions are logged
 out on ordinary completion/failure. The old `FAA_PR_SCANS_ENABLED` variable is no longer
 used: selection is driven directly by the configured criteria.
@@ -119,11 +161,13 @@ Both platform actions require `--source-dir`, `--pr-number` and `--change-range`
 (or `SOURCE_DIR`, `FAA_PR_NUMBER`, `FAA_CHANGE_RANGE`). The target comes from `--rel` /
 `FOD_RELEASE` or `--av` / `SSC_APPVERSION`. Only two distinct full commit SHAs are accepted
 for the range. Arbitrary extra scan options and full-scan mode are deliberately unavailable.
+The optional `--baseline` action option defaults to `FAA_PREVIOUS_SARIF` and is omitted
+from the FAA command when no validated previous report was restored.
 
 ## Validation and demonstration
 
 ```powershell
-node --test .github\tests\faa-risk-adapter.test.mjs
+node --test .github\tests\faa-risk-adapter.test.mjs .github\tests\faa-sarif-baseline.test.mjs
 fcli fod action help .github\custom-actions\fod\faa-scan.yaml
 fcli ssc action help .github\custom-actions\ssc\faa-scan.yaml
 git --no-pager diff --check
@@ -137,6 +181,10 @@ The `faa-scan-<PR>` artifact (`faa-scan-ssc-<PR>` for SSC) contains `faa.sarif` 
 `faa.sarif.md`; the risk artifact is separate.
 Recommended/low-risk cases should retain risk evidence with the scan job skipped.
 No skipped, cancelled or test-only job proves FAA execution.
+To prove baseline reuse, push two successive risk-selected changes on the same PR without
+changing its merge base. The first run publishes the scoped baseline artifact; after it
+finishes successfully, the second run should log `FAA previous SARIF available: true`
+and invoke FAA with `--baseline`. Its FROM/TO range still comes from the risk adapter.
 
 Findings are report-only, not a release gate. Importing or reporting a finding does not
 resolve it, suppress it or record risk acceptance. Artifacts are retained for 14 days and
