@@ -57,6 +57,13 @@ cli.options:
       Release must already exist in FoD.
     required: true
     default: ${#env('FOD_RELEASE')}
+  faaFodSession:
+    names: --faa-fod-session
+    description: >-
+      Named fcli FoD session for FAA's native --fod-release integration.
+      Defaults to FAA_FOD_SESSION; omit to use fcli's default session.
+    required: false
+    default: ${#env('FAA_FOD_SESSION')}
   scope:
     names: --scope
     description: >-
@@ -111,6 +118,7 @@ steps:
           -scan "${cli.sourceDir}"
           ${#isNotBlank(cli.changeRange) ? '--differential "' + cli.changeRange + '"' : ''}
           --fod-release "${cli.release}"
+          ${#isNotBlank(cli.faaFodSession) ? '--fcli-fod-session "' + cli.faaFodSession + '"' : ''}
           ${#isNotBlank(cli.scope) ? '--scope "' + cli.scope + '"' : ''}
           ${#isNotBlank(cli.baseline) ? '--baseline "' + cli.baseline + '"' : ''}
           -o "${cli.faaOutput}"

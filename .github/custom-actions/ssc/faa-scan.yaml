@@ -54,6 +54,13 @@ cli.options:
       Application version must already exist in SSC.
     required: true
     default: ${#env('SSC_APPVERSION')?:#env('APP_VERSION')}
+  faaSscSession:
+    names: --faa-ssc-session
+    description: >-
+      Named fcli SSC session for FAA's native --ssc-appversion integration.
+      Defaults to FAA_SSC_SESSION; omit to use fcli's default session.
+    required: false
+    default: ${#env('FAA_SSC_SESSION')}
   scope:
     names: --scope
     description: >-
@@ -120,6 +127,7 @@ steps:
           -scan "${cli.sourceDir}"
           ${#isNotBlank(cli.changeRange) ? '--differential "' + cli.changeRange + '"' : ''}
           --ssc-appversion "${cli.appVersion}"
+          ${#isNotBlank(cli.faaSscSession) ? '--fcli-ssc-session "' + cli.faaSscSession + '"' : ''}
           ${#isNotBlank(cli.scope) ? '--scope "' + cli.scope + '"' : ''}
           ${#isNotBlank(cli.baseline) ? '--baseline "' + cli.baseline + '"' : ''}
           -o "${cli.faaOutput}"

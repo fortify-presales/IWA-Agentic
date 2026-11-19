@@ -241,16 +241,18 @@ jobs:
           FAA_SCOPE: ${{ github.workspace }}/packages
           # Same application version the SAST job set up (fcli ci default: <repository>:<branch>)
           SSC_APPVERSION: ${{ format('{0}:{1}', github.repository, github.head_ref) }}
+          FAA_SSC_SESSION: faa-${{ github.run_id }}-${{ github.run_attempt }}
           FCLI_DEFAULT_SSC_URL: ${{ vars.SSC_URL }}
           FCLI_DEFAULT_SSC_TOKEN: ${{ secrets.SSC_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          session_opt="--ssc-session=faa-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          session_opt="--ssc-session=$FAA_SSC_SESSION"
           fcli ssc session login "$session_opt"
           trap 'fcli ssc session logout "$session_opt"' EXIT
           mkdir -p "$RUNNER_TEMP/faa-output"
           fcli ssc action run "$GITHUB_WORKSPACE/.github/custom-actions/ssc/faa-scan.yaml" \
-            "$session_opt" --on-unsigned=ignore --output "$RUNNER_TEMP/faa-output/faa.sarif"
+            "$session_opt" --on-unsigned=ignore --faa-ssc-session "$FAA_SSC_SESSION" \
+            --output "$RUNNER_TEMP/faa-output/faa.sarif"
           cat "$RUNNER_TEMP/faa-output/faa.sarif.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Validate current FAA SARIF
         id: current

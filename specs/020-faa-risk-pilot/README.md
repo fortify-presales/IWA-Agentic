@@ -116,7 +116,9 @@ starts a new baseline. Artifact discovery requires `actions: read` on the FAA jo
 permission is added.
 
 Each FAA job only receives its own platform's credentials. Named fcli sessions are logged
-out on ordinary completion/failure. The old `FAA_PR_SCANS_ENABLED` variable is no longer
+out on ordinary completion/failure. The FoD/SSC session name is also passed explicitly to
+FAA's `--fcli-fod-session` / `--fcli-ssc-session` option for native platform-findings lookup.
+The old `FAA_PR_SCANS_ENABLED` variable is no longer
 used: selection is driven directly by the configured criteria.
 
 ## Adapter interface
