@@ -9,6 +9,7 @@
 #   OPENAI_API_KEY is used by the optional FAA-Scan job (differential FAA on risky PRs).
 # Optional risk-based FAA (see specs/020-faa-risk-pilot/README.md):
 #   FAA_LICENSE_PLATFORM - "fod" (default) runs the FAA jobs here; "ssc" runs them in scancentral.yml.
+#   FAA_DEMO_ONLY       - "true" skips this workflow's SAST job on non-draft PRs; FAA requires an existing release.
 # Helpful hints:
 #   API Key credentials can be obtained from your FoD tenant, under Administration -> Settings -> API
 #   It is recommended to create credentials with 'Security Lead' Role selected.
@@ -43,6 +44,10 @@ on:
 
 jobs:
   Fortify-AST-Scan:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == true ||
+      vars.FAA_DEMO_ONLY != 'true'
     runs-on: ubuntu-latest
     env:
       NEXUS_REPO_NPM: ${{ vars.NEXUS_REPO_NPM || 'https://registry.npmjs.org/' }}
@@ -116,8 +121,8 @@ jobs:
           CHECK_POLICY_ACTION: ${{ github.workspace }}/.github/custom-actions/fod/check-policy.yaml
           CHECK_POLICY_EXTRA_OPTS: --on-unsigned=ignore --scan-types Static
 
-  # Risk-based FAA: score the PR, then run a differential FAA scan only after the
-  # SAST job above has set up the branch release and produced SAST context.
+  # Risk-based FAA: score the PR, then run a differential FAA scan. In demo-only
+  # mode the existing branch release is used without running SAST first.
   FAA-Risk:
     if: >-
       github.event_name == 'pull_request' && github.event.pull_request.draft == false &&
@@ -154,8 +159,18 @@ jobs:
   FAA-Scan:
     needs: [Fortify-AST-Scan, FAA-Risk]
     if: >-
+      !cancelled() &&
+      needs.FAA-Risk.result == 'success' &&
       needs.FAA-Risk.outputs.do_faa == 'true' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        needs.Fortify-AST-Scan.result == 'success' ||
+        (
+          github.event_name == 'pull_request' &&
+          vars.FAA_DEMO_ONLY == 'true' &&
+          needs.Fortify-AST-Scan.result == 'skipped'
+        )
+      )
     runs-on: [self-hosted, Linux, X64, fortify, faa]
     timeout-minutes: 60
     permissions:

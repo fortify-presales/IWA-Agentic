@@ -8,15 +8,13 @@ usage:
     and uploads the differential SARIF results to the specified SSC branch version.
     There is no full-scan mode or arbitrary scan-options passthrough.
     
-    The action automatically downloads the latest processed SAST scan results for the
-    specified application version. FAA uses this context to avoid reporting duplicate
-    issues that were already found by SAST, resulting in higher quality analysis results.
-    If no processed SAST results are available, FAA runs without SAST context.
-    
-    NOTE: SAST context is taken from the latest SAST artifact that has been fully processed
-    by SSC at the time this action runs. If a more recent SAST scan hasn't been processed
-    yet, results from an earlier SAST scan will be used. This action does not start
-    or wait for a new SAST scan.
+    FAA obtains the existing findings for the specified SSC application version directly
+    from SSC (--ssc-appversion) and uses them as complementary-analysis context, so that
+    issues already identified by Fortify SAST are not reported as new FAA findings. No
+    FPR is downloaded or processed locally.
+
+    NOTE: FAA uses the findings available in SSC at the time this action runs. This action
+    does not start or wait for a new SAST scan.
 
 config:
   output: immediate
@@ -46,7 +44,8 @@ cli.options:
   appVersion:
     names: --app-version, --av
     description: >-
-      SSC application version for which to download SAST results and upload FAA scan results.
+      SSC application version from which FAA obtains existing findings and to which FAA
+      scan results are uploaded.
       Application version must already exist in SSC.
     required: true
     default: ${#env('SSC_APPVERSION')?:#env('APP_VERSION')}
@@ -81,9 +80,6 @@ steps:
   - if: ${!cli.changeRange.matches('[a-f0-9]{40}[.]{2}[a-f0-9]{40}') || cli.changeRange.substring(0,40)==cli.changeRange.substring(42)}
     throw: A nonempty merge-base..head range with two full commit SHAs is required; full scans are not supported.
   - var.set:
-      sastFprFile: ${cli.faaOutput}.context.fpr
-      fprArg: ''
-      sastArtifactId: null
       # fcli variable storing the uploaded artifact, used for waiting for artifact processing
       faaArtifactVarName: faa_scan_${#action.runID().replace('-','_')}
   
@@ -92,55 +88,15 @@ steps:
         cmd: >-
           fcli tool env init --preinstalled "--tools=fortifyaa${#isNotBlank(cli.faaPath) ? ':' + cli.faaPath : ''}"
   
-  # Determine latest processed SAST artifact for the application version (optional)
-  - do:
-      - var.set:
-          sastAv: ${#ssc.appVersion(cli.appVersion)}
-      - rest.call:
-          sastArtifacts:
-            uri: /api/v1/projectVersions/${sastAv.id}/artifacts
-            type: paged
-            query:
-              embed: scans
-              orderby: uploadDate DESC
-            records.for-each:
-              record.var-name: artifact
-              breakIf: ${sastArtifactId!=null}
-              do:
-                - if: >-
-                    ${artifact.status=='PROCESS_COMPLETE' && artifact._embed.scans?.^[type=='SCA']!=null}
-                  var.set:
-                    sastArtifactId: ${artifact.id}
-      - if: ${sastArtifactId==null}
-        log.info: No processed SAST artifact found for application version '${cli.appVersion}'; FAA scan will run without SAST context.
-    on.fail:
-      - log.warn:
-          msg: Unable to query SAST artifacts for application version '${cli.appVersion}'; FAA scan will run without SAST context.
-          cause: ${lastException}
-  
-  - if: ${sastArtifactId!=null}
-    run.fcli:
-      DOWNLOAD_SAST_FPR:
-        cmd: fcli ssc artifact download "${sastArtifactId}" -f "${sastFprFile}"
-        status.check: false
-        on.success:
-          - var.set:
-              fprArg: '--fpr "${sastFprFile}"'
-        on.fail:
-          - log.warn:
-              msg: Failed to download SAST FPR artifact; FAA scan will run without SAST context.
-              cause: ${lastException}
-  
-  # Run FAA scan with SAST FPR context if SAST results are available, otherwise run without SAST context
+  # Run differential FAA scan using existing SSC findings as complementary context
   - run.fcli:
       RUN_FAA_SCAN:
         cmd: >
           fcli tool fortifyaa run --workdir "${cli.sourceDir}" --
           -b "pr-${cli.prNumber}-${#action.runID()}"
           -scan "${cli.sourceDir}"
-          --scope "${cli.sourceDir}"
           --differential "${cli.changeRange}"
-          ${fprArg}
+          --ssc-appversion "${cli.appVersion}"
           -o "${cli.faaOutput}"
           --output-format sarif,md-summary
           --output-md-summary "${cli.faaOutput}.md"

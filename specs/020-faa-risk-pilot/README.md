@@ -6,22 +6,27 @@ FAA runs as two extra jobs in the existing platform workflow:
 [fod.yml](../../.github/workflows/fod.yml) for FoD (default) or
 [scancentral.yml](../../.github/workflows/scancentral.yml) for SSC.
 
-1. **`FAA-Risk` (Ubuntu, parallel with SAST):** run the tests and the dependency-free
+1. **`FAA-Risk` (Ubuntu, parallel with SAST in normal mode):** run the tests and the dependency-free
    [risk adapter](../../.github/scripts/faa-risk-adapter.mjs). Publish the score,
    decision, `do_faa` boolean and exact `merge-base(base,head)..head` range.
-2. **`FAA-Scan` (existing FAA runner):** `needs` both `Fortify-AST-Scan` and `FAA-Risk`.
-   Only for selected, same-repository, non-draft PRs, run the
+2. **`FAA-Scan` (existing FAA runner):** normally waits for both `Fortify-AST-Scan` and
+   `FAA-Risk`. Only for selected, same-repository, non-draft PRs, run the
    [FoD](../../.github/custom-actions/fod/faa-scan.yaml) or
    [SSC](../../.github/custom-actions/ssc/faa-scan.yaml) differential action against
-   the branch target the SAST job set up, using its SAST results as context.
+   the branch target, using existing platform findings as complementary context.
    Import the SARIF into that platform and retain the FAA reports in GitHub.
 
 Release/application-version setup (owner, SDLC status, assessment type, issue template,
 copy-from, scan settings) is owned solely by the SAST job's `fortify/github-action`
-configuration; the FAA job never creates or configures a target. FAA therefore only runs
-when the platform workflow's `pull_request` path filters match and the SAST job succeeds.
-Default `pull_request` activity types apply, so declaration or label edits take effect on
-the next push. There is no push, manual or full FAA scan.
+configuration; the FAA job never creates or configures a target. Normally FAA runs only
+after SAST succeeds. For a demo, set the repository variable `FAA_DEMO_ONLY` to `true`:
+on non-draft PRs this skips SAST and permits the risk-selected differential FAA job to use the
+existing branch target. That target must already exist; run normal SAST once for the
+branch before enabling demo-only mode. Unset the variable or set it to `false` to restore
+normal behavior. Push and manual runs still run SAST regardless of this variable.
+FAA only runs when the platform workflow's `pull_request` path filters match. Default
+`pull_request` activity types apply, so declaration or label edits take effect on the
+next push. There is no push, manual or full FAA scan.
 
 ## Configurable criteria
 
@@ -59,6 +64,8 @@ and optionally copy the declaration sections of the PR template.
   official Fortify setup action; the custom actions register preinstalled FAA only.
 - `FAA_LICENSE_PLATFORM` is `fod` (default) or `ssc`; it selects which platform workflow
   runs the FAA jobs, so a PR never gets two FAA scans.
+- `FAA_DEMO_ONLY` is unset/`false` by default. Set it to `true` to skip SAST on non-draft PRs and
+  run only risk-selected differential FAA scans against an existing branch target.
 - FoD: variable `FOD_URL`, secrets `FOD_CLIENT_ID` and `FOD_CLIENT_SECRET`.
   `FOD_DEFAULT_OWNER` is used when supplied for application creation.
 - SSC: variable `SSC_URL`, secret `SSC_TOKEN`.
@@ -70,9 +77,10 @@ The target is **`<github.repository>:<github.head_ref>`**, the same name `fortif
 uses for the SAST job. For example, a branch `demo/faa` in this repository
 uses `fortify-presales/IWA-Agentic:demo/faa`.
 
-Each action takes the latest SAST FPR from the branch target as context; because FAA waits
-for the SAST job this is normally the scan just completed. If unavailable, it logs a warning
-and continues without SAST context. This is not a fallback to a full FAA scan.
+The FoD action uses FAA's `--fod-release` integration, and the SSC action uses
+`--ssc-appversion`, to obtain existing findings directly from their respective platforms.
+Neither action downloads an FPR or starts or waits for a new SAST scan. Findings available
+at run time are used as complementary context. This is not a fallback to a full FAA scan.
 FoD SARIF processing is asynchronous; SSC waits for artifact processing.
 
 Each FAA job only receives its own platform's credentials. Named fcli sessions are logged
