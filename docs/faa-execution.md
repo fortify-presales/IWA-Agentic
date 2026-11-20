@@ -1,18 +1,27 @@
-# Risk-based FAA PR demonstration
+# FAA pull request execution
 
-## The example
+This guide describes the repository's implemented, risk-based Fortify Agentic Analyzer
+(FAA) demonstration and how to operate it. FAA supplements the existing SAST/SCA scans:
+it is selected for higher-risk pull requests rather than for every change or merely
+because AI assistance was used.
+
+The assessment is explainable and retained as evidence, but it is not an independent
+security control against untrusted PR authors. See [Demo trust boundary](#demo-trust-boundary)
+before enabling the scan.
+
+## Execution flow
 
 FAA runs as two extra jobs in the existing platform workflow:
-[fod.yml](../../.github/workflows/fod.yml) for FoD (default) or
-[scancentral.yml](../../.github/workflows/scancentral.yml) for SSC.
+[fod.yml](../.github/workflows/fod.yml) for FoD (default) or
+[scancentral.yml](../.github/workflows/scancentral.yml) for SSC.
 
 1. **`FAA-Risk-Summary` (Ubuntu, parallel with SAST in normal mode):** run the tests and the dependency-free
-   [risk adapter](../../.github/scripts/faa-risk-adapter.mjs). Publish the score,
+   [risk adapter](../.github/scripts/faa-risk-adapter.mjs). Publish the score,
    `do_faa` boolean and exact `merge-base(base,head)..head` range.
 2. **`FAA-Scan` (existing FAA runner):** normally waits for both `Fortify-AST-Scan` and
    `FAA-Risk-Summary`. Only for selected, same-repository, non-draft PRs, run the
-   [FoD](../../.github/custom-actions/fod/faa-scan.yaml) or
-   [SSC](../../.github/custom-actions/ssc/faa-scan.yaml) differential action against
+   [FoD](../.github/custom-actions/fod/faa-scan.yaml) or
+   [SSC](../.github/custom-actions/ssc/faa-scan.yaml) differential action against
    the branch target, using existing platform findings as complementary context.
    Import the SARIF into that platform and retain the FAA reports in GitHub.
 
@@ -28,19 +37,52 @@ FAA only runs when the platform workflow's `pull_request` path filters match. De
 `pull_request` activity types apply, so declaration or label edits take effect on the
 next push. There is no push, manual or full FAA scan.
 
-## Configurable criteria
+## Risk scoring
 
-Edit [faa-policy.json](../../.github/faa-policy.json), not the adapter. Its `_instructions`
+Edit [faa-policy.json](../.github/faa-policy.json), not the adapter. Its `_instructions`
 block explains the format. In short, it has one `threshold` and a list of `rules`. Each rule has a
 `name`, `points` and exactly one condition:
 
-- `label`: the PR has this label (`faa-required` is worth the full threshold, so it forces FAA).
+- `label`: the PR has this label (`faa-required` is worth the full threshold by itself).
 - `paths`: case-insensitive regular expressions matched against changed repository paths.
 - `declaration`: a `- <field>: <value>` answer in the PR body, from the existing PR template.
 - `minChangedLines`: added plus deleted lines in the PR are at least this number.
 
-Each matching rule adds its points once; FAA is selected when the score reaches the threshold.
-These are configurable heuristics, not semantic analysis. Declarations can only add risk.
+Each matching rule adds its points once, even if it matches multiple paths. The current
+threshold is **5**:
+
+| Current policy signal | Points |
+| --- | ---: |
+| `faa-required` label | 5 |
+| Authentication or authorization path | 5 |
+| Secrets or credential-handling path | 5 |
+| API path | 3 |
+| A `package.json` dependency manifest | 2 |
+| Significant or predominant AI assistance declared | 2 |
+| AI-generated code declared not manually reviewed | 3 |
+| Security-sensitive change declared | 3 |
+| At least 500 added plus deleted lines | 2 |
+
+The [policy](../.github/faa-policy.json) is authoritative for the exact path patterns and
+weights. For example, declaring significant AI assistance and answering `no` to manual
+review contributes 5 points together. Missing or unrecognized declaration answers add
+no points. An authentication path reaches the threshold even when a PR declaration says
+no authentication change occurred. Other declaration fields are for human review and do
+not affect the current score.
+
+The adapter sets `selected` when the score reaches the threshold. It sets `doFaa` only
+when the PR is also from the same repository and has at least one non-deleted change.
+The workflow additionally checks the PR event, draft status, path filters and SAST/demo
+conditions before running FAA. The line count covers the PR diff, not just executable
+code; binary files contribute no line count. These are configurable heuristics, not
+semantic analysis, and declarations can only add risk.
+
+The broader design proposed separate advisory and mandatory thresholds, application
+classification and release gates. Those are not implemented here: the current policy has
+one threshold, no separate mandatory override, and no scoring based on FoD/SSC metadata,
+previous FAA baseline age, or semantic dependency changes. Existing platform findings
+and an optional prior SARIF are supplied to FAA after selection, not used to calculate
+the score.
 
 The adapter contains no repository-specific configuration. Copy it and a policy to another
 repository and adjust the rules; its header comment shows the workflow wiring and how to add
@@ -71,13 +113,14 @@ The FoD action uses FAA's `--fod-release` integration, and the SSC action uses
 `--ssc-appversion`, to obtain existing findings directly from their respective platforms.
 Neither action downloads an FPR or starts or waits for a new SAST scan. Findings available
 at run time are used as complementary context. This is not a fallback to a full FAA scan.
-FoD SARIF processing is asynchronous; SSC waits for artifact processing.
+FoD SARIF processing is asynchronous; SSC waits for artifact processing by default.
+The direct SSC action also supports `--skip-wait`.
 
 ### Previous FAA SARIF
 
 The workflows also restore a prior FAA SARIF using GitHub's artifact API and
 `actions/download-artifact`. The shared
-[baseline helper](../../.github/scripts/faa-sarif-baseline.mjs) selects the newest eligible
+[baseline helper](../.github/scripts/faa-sarif-baseline.mjs) selects the newest eligible
 earlier successful run of the same workflow, backend, repository, PR and source branch.
 The prior source commit must be an ancestor of the current PR head, and the merge-base
 SHA must match the risk adapter's current FROM commit. Metadata in the artifact is checked
@@ -97,9 +140,10 @@ The option was verified against `fortifyaa -help` for FAA 26.4.0, which lists
 scan)". There is no `--previous-sarif` option.
 
 The restored file is `$RUNNER_TEMP/faa-previous/previous-faa.sarif`, outside the source
-checkout. Missing baselines are normal; discovery/download failures or invalid previous
-SARIF/metadata log a warning and scanning continues without `--baseline`. No empty baseline
-is generated. If the newest selected artifact is invalid, older artifacts are not tried.
+checkout. Missing baselines are normal. GitHub API HTTP errors, download failures and
+unusable previous SARIF/metadata log a warning and scanning continues without `--baseline`.
+Unexpected discovery or validation errors fail the step. No empty baseline is generated.
+If the newest selected artifact is invalid, older artifacts are not tried.
 
 After the existing FAA scan and platform import succeed, the helper validates the nonempty
 SARIF 2.1.0 report at `$RUNNER_TEMP/faa-output/faa.sarif` and writes `faa-baseline.json`
@@ -110,7 +154,7 @@ Retention remains 14 days, matching the existing report artifacts. A failed scan
 current report cannot publish a reusable baseline. Existing always-uploaded diagnostic
 reports remain separate and are never selected as baselines.
 
-Only artifacts with this metadata contract are eligible: the first run after this update
+Only artifacts with this metadata contract are eligible: the first eligible successful run
 seeds a baseline; a subsequent successful PR run can reuse it. A changed merge base also
 starts a new baseline. Artifact discovery requires `actions: read` on the FAA job; no write
 permission is added.
@@ -128,17 +172,20 @@ node .github\scripts\faa-risk-adapter.mjs --event C:\temp\pr-event.json --source
 ```
 
 `--event` defaults to `GITHUB_EVENT_PATH`; `--policy` defaults to the policy beside the
-script's parent directory. The source checkout must be at the event's head SHA and contain
-the base history. Required event fields are `pull_request.{number,body,labels,base.sha,base.repo.id,head.sha}`;
-`head.repo.id` must match `base.repo.id` for `do_faa=true`.
+script's parent directory. The event must contain `pull_request.base.sha` and
+`pull_request.head.sha` as 40-character lowercase hexadecimal SHAs, plus an integer
+`pull_request.base.repo.id`. The source checkout must be at the head SHA and contain the
+base history. `head.repo.id` must match `base.repo.id` for `do_faa=true`; the PR number,
+body and labels are recorded or used when present.
 
 Outputs written after successful assessment:
 
-- `faa-risk-result.json`: score, threshold, matched rules with evidence, range and `doFaa`.
+- `faa-risk-result.json`: `score`, `threshold`, `selected`, `matched` rules and evidence,
+  `doFaa`, `skipReason`, `changeRange` and `pullRequest`.
 - `faa-risk-summary.md`: human-readable evidence.
 - `GITHUB_OUTPUT`: `score`, `do_faa`, `change_range`.
 
-Below-threshold scores, forks and deletion-only diffs do not select FAA.
+Below-threshold scores, forks and deletion-only diffs do not select an FAA run.
 Draft PRs are skipped by the workflow.
 
 fcli 3.30.0's built-in `ci` action **does not implement `DO_FAA`**. The example therefore
@@ -157,20 +204,26 @@ Both platform actions require `--source-dir` (or `SOURCE_DIR`). They support two
   the existing GitHub workflows remain PR differential scans.
 
 The target comes from `--rel` / `FOD_RELEASE` or `--av` / `SSC_APPVERSION`.
-Arbitrary extra scan options are unavailable. For example, with an authenticated fcli
-session and FAA already configured, scan all application files:
+Arbitrary extra scan options are unavailable. The checked-in actions are unsigned, so
+fcli prompts for confirmation by default; review the action before approving it. The
+workflows use `--on-unsigned=ignore` for unattended execution.
+
+For example, with an authenticated fcli session and FAA already configured, the following
+commands scan all application files and import/upload results to the specified target.
+They may incur analyzer or provider charges:
 
 ```powershell
 fcli fod action run .github\custom-actions\fod\faa-scan.yaml --source-dir "$PWD" --scope "$PWD\packages" --rel "<existing-release>"
 fcli ssc action run .github\custom-actions\ssc\faa-scan.yaml --source-dir "$PWD" --scope "$PWD\packages" --av "<existing-app:version>"
 ```
 
-These commands import/upload results to the specified target. Neither action runs SAST.
-The optional `--baseline` action option defaults to `FAA_PREVIOUS_SARIF` and is omitted
+Neither action runs SAST. The optional `--baseline` action option defaults to
+`FAA_PREVIOUS_SARIF` and is omitted
 from the FAA command when no validated previous report was restored. The optional `--scope`
 option defaults to `FAA_SCOPE`; both workflows set it to `<workspace>/packages`, so only
-changed application files under `packages/` are analysed. `-scan` stays at the repository
-root because `--differential` needs the Git repository.
+changed application files under `packages/` are analysed. Risk scoring still considers the
+whole PR diff. `-scan` stays at the repository root because `--differential` needs the Git
+repository.
 
 ## Validation and demonstration
 
@@ -181,12 +234,14 @@ fcli ssc action help .github\custom-actions\ssc\faa-scan.yaml
 git --no-pager diff --check
 ```
 
-Use a same-repository, non-draft PR with a real added/modified file and completed declarations.
-Adding the configured `faa-required` label is a deterministic selection case; no artificial
-application vulnerability is necessary. Check the exact range in `faa-risk-result.json`,
-the fcli scan/import step result, and the platform's **branch** target.
+Use a same-repository, non-draft PR with a real added/modified non-Markdown file under
+`packages/` and completed declarations. Adding the configured `faa-required` label and
+pushing the change is a deterministic selection case; no artificial application
+vulnerability is necessary. A selected run invokes FAA and may incur charges. Check the
+exact range in `faa-risk-result.json`, the fcli scan/import step result, and the platform's
+**branch** target.
 The `faa-scan-<PR>` artifact (`faa-scan-ssc-<PR>` for SSC) contains `faa.sarif` and
-`faa.sarif.md`; the risk artifact is separate.
+`faa.sarif.md`; risk evidence is in `faa-risk-<PR>` for FoD or `faa-risk-ssc-<PR>` for SSC.
 Below-threshold cases should retain risk evidence with the scan job skipped.
 No skipped, cancelled or test-only job proves FAA execution.
 To prove baseline reuse, push two successive risk-selected changes on the same PR without
@@ -194,9 +249,10 @@ changing its merge base. The first run publishes the scoped baseline artifact; a
 finishes successfully, the second run should log `FAA previous SARIF available: true`
 and invoke FAA with `--baseline`. Its FROM/TO range still comes from the risk adapter.
 
-Findings are report-only, not a release gate. Importing or reporting a finding does not
-resolve it, suppress it or record risk acceptance. Artifacts are retained for 14 days and
-may contain code snippets; consider access/retention when copying this public demo.
+The workflows do not gate releases based on findings; branch protection may separately
+require workflow status. Importing or reporting a finding does not resolve it, suppress it
+or record risk acceptance. Artifacts are retained for 14 days and may contain code snippets;
+consider access/retention when copying this public demo.
 
 ## Demo trust boundary
 
@@ -211,3 +267,8 @@ and runner isolation are not established by this workflow; a timeout is not a sp
 Use a dedicated least-privilege runner and review CI/control changes before triggering scans.
 The earlier Critical Build Script Injection finding still needs explicit owner disposition:
 retiring its old launcher is not a claim of formal risk acceptance or a general trust-boundary fix.
+
+For production enforcement, consider protected and reviewed base-branch or reusable
+controls, restricted ownership of the policy and workflow, an isolated least-privilege
+runner, explicit agent tool/network and spending limits, and documented review and
+exception procedures. This demonstration does not establish those protections.

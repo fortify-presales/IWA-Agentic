@@ -2,22 +2,23 @@
 [![Fortify on Demand Scan](https://github.com/fortify-presales/IWA-Agentic/actions/workflows/fod.yml/badge.svg)](https://github.com/fortify-presales/IWA-Agentic/actions/workflows/fod.yml)
 [![Fortify ScanCentral Scan](https://github.com/fortify-presales/IWA-Agentic/actions/workflows/scancentral.yml/badge.svg)](https://github.com/fortify-presales/IWA-Agentic/actions/workflows/scancentral.yml)
 
-# IWA Pharmacy Direct — Node.js
+# IWA Agentic
 
 > ⚠️ **WARNING: This application is INTENTIONALLY VULNERABLE. DO NOT deploy to the internet or any production environment.**
 > It is designed solely for security training, demonstrations, and testing of SAST/DAST/SCA tools.
 
 ## Overview
 
-IWA Pharmacy Direct is a deliberately insecure e-commerce web application — a Node.js/TypeScript port of the
-[IWA-Java](https://github.com/fortify/IWA-Java) Spring Boot demo app by OpenText/Fortify.
-It is used to demonstrate and teach application security tools including:
+IWA Agentic is a deliberately insecure e-commerce web application — a Node.js/TypeScript port of the
+[IWA-Java](https://github.com/fortify/IWA-Java) Spring Boot demo app by OpenText/Fortify, with additional
+Agentic capabilities. It is used to demonstrate and teach application security tools including:
 
 - **Fortify SAST** — finds code-level vulnerabilities
 - **Fortify DAST** — finds runtime vulnerabilities
 - **Fortify Software Composition Analysis (SCA)** — open-source vulnerability scanning
 - **Fortify on Demand (FoD)** — cloud-based SAST/DAST
 - **ScanCentral SAST/DAST** — enterprise SAST/DAST scanning
+- **Fortify Agentic Analyzer** — AI-powered security analysis ([execution runbook](docs/faa-execution.md))
 
 All vulnerabilities are **intentional and must be preserved** for teaching purposes.
 

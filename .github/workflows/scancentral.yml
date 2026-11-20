@@ -8,7 +8,7 @@
 #   SC_SAST_TOKEN should be a ScanCentral SAST client authentication token.
 #   AVIATOR_TOKEN should be the token used to authenticate against the Aviator service.
 #   OPENAI_API_KEY is used by the optional FAA-Scan job (differential FAA on risky PRs).
-# Optional risk-based FAA (see specs/020-faa-risk-pilot/README.md):
+# Optional risk-based FAA (see docs/faa-execution.md):
 #   FAA_LICENSE_PLATFORM - set to "ssc" to run the FAA jobs here instead of in fod.yml.
 #   FAA_DEMO_ONLY       - "true" skips this workflow's SAST job on non-draft PRs; FAA requires an existing application version.
 # Helpful hints:

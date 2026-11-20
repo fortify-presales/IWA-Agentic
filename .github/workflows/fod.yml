@@ -7,7 +7,7 @@
 #   FOD_CLIENT_ID should be an API Key obtained from your FoD tenant.
 #   FOD_CLIENT_SECRET should be the secret for the API Key obtained for your FoD tenant.
 #   OPENAI_API_KEY is used by the optional FAA-Scan job (differential FAA on risky PRs).
-# Optional risk-based FAA (see specs/020-faa-risk-pilot/README.md):
+# Optional risk-based FAA (see docs/faa-execution.md):
 #   FAA_LICENSE_PLATFORM - "fod" (default) runs the FAA jobs here; "ssc" runs them in scancentral.yml.
 #   FAA_DEMO_ONLY       - "true" skips this workflow's SAST job on non-draft PRs; FAA requires an existing release.
 # Helpful hints:
