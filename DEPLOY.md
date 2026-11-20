@@ -95,12 +95,15 @@ Set this Railway service variable:
 
 On startup, the app recreates the schema and seed data automatically. With a persistent Railway volume, this clears corrupted runtime data. Without a persistent volume, it is still harmless because the container filesystem is already fresh.
 
-To trigger the reset every night without Railway API tokens or deploy hooks, configure Railway to deploy the GHCR image tag that this repository publishes:
+Normal deployments come from the GHCR image published by [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Every push to `main` that passes build, test and lint pushes `ghcr.io/<repository-owner>/<repository-name>:latest` and a `:<commit-sha>` tag. Configure the Railway service to run the `:latest` image and enable image auto-updates so Railway redeploys when the digest changes.
 
-1. In Railway, configure the service to run `ghcr.io/<repository-owner>/<repository-name>:latest`.
-2. Ensure Railway is set to redeploy when that image tag is updated.
-3. Enable the scheduled workflow in [`.github/workflows/railway-nightly-reset.yml`](.github/workflows/railway-nightly-reset.yml).
+The nightly data reset is handled separately by [`.github/workflows/restart-railway.yml`](.github/workflows/restart-railway.yml). It runs at `02:00 UTC` (or on demand via **Run workflow**) and calls `railway restart` on the service. On restart the entrypoint sees `RESET_DATA_ON_START=true`, removes runtime state, and the application seeds a clean demo database. No image rebuild is needed.
 
-The workflow runs at `02:00 UTC` each night and rebuilds the Docker image, pushing both `latest` and a dated `nightly-reset-YYYYMMDD` tag to GitHub Container Registry. Railway sees the `latest` image digest change, redeploys the service, the entrypoint sees `RESET_DATA_ON_START=true`, removes runtime state, and the application seeds a clean demo database.
+The restart workflow needs:
+
+| Name              | Type                | Value                                                                                                   |
+| ----------------- | ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `RAILWAY_TOKEN`   | Repository secret   | A Railway **Project Token** (Project → Settings → Tokens) for the target environment. Account/team tokens fail with `No linked project found`. |
+| `RAILWAY_SERVICE` | Repository variable | The Railway service name or ID to restart.                                                              |
 
 Because this is a reset-on-start switch, any normal Railway redeploy will also reset the demo data while the variable is enabled. That is usually desirable for this intentionally vulnerable training app.

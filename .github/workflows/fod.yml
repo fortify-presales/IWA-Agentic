@@ -30,8 +30,8 @@ on:
       - '.npmrc'
       - '.github/workflows/fod.yml'
       - '.github/custom-actions/fod/**'
-      - '.github/scripts/faa-sarif-baseline.mjs'
-      - '.github/tests/faa-sarif-baseline.test.mjs'
+      - '.github/scripts/*.mjs'
+      - '.github/tests/*.mjs'
   push:
     branches: [ "main", "demo/fortify-remediate-fod" ]
     paths:
@@ -43,6 +43,8 @@ on:
       - '.npmrc'
       - '.github/workflows/fod.yml'
       - '.github/custom-actions/fod/**'
+      - '.github/scripts/*.mjs'
+      - '.github/tests/*.mjs'
 
 jobs:
   Fortify-AST-Scan:
