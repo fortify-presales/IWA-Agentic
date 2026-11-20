@@ -8,10 +8,11 @@ import { Review } from '../models/Review.js';
 import { Authority } from '../models/Authority.js';
 import { RefreshToken } from '../models/RefreshToken.js';
 import { UserAuthority } from '../models/UserAuthority.js';
+import { StockMovement } from '../models/StockMovement.js';
 
 export const sequelize = new Sequelize({
   dialect: 'sqlite',
   storage: env.databaseUrl,
   logging: env.isDevelopment ? console.log : false,
-  models: [User, Product, Order, Message, Review, Authority, RefreshToken, UserAuthority],
+  models: [User, Product, Order, Message, Review, Authority, RefreshToken, UserAuthority, StockMovement],
 });
