@@ -6,14 +6,15 @@
 
 ## Summary
 
-Add a separately runnable worker that schedules bounded inventory-review jobs, invokes an LLM-backed
-tool loop, records job progress and tool outcomes, and creates purchase orders only in a local
-simulated supplier. Reuse the stock and movement services from `011-inventory-management`; do not
-change the existing chat agent's runtime or make its tools available to the worker by default. Keep
-model construction lazy so the main API can start without worker credentials. Add deterministic
-test doubles and preserve three narrowly scoped, explicitly marked vulnerability demonstrations:
-business-data prompt injection, excessive purchasing authority, and duplicate simulated orders after
-retry.
+Add an opt-in scheduler inside the API process and its existing container. It schedules bounded
+inventory-review jobs, invokes an LLM-backed tool loop, records job progress and tool outcomes, and
+creates purchase orders only in a local simulated supplier. Provide a one-shot CLI entry point that
+uses the same worker path. Reuse the completed stock and movement services from
+`011-inventory-management`; do not change the existing chat agent's runtime or make its tools
+available to the worker by default. Keep model construction lazy so the main API can start without
+worker credentials. Add deterministic test doubles and preserve three narrowly scoped, explicitly
+marked vulnerability demonstrations: business-data prompt injection, excessive purchasing authority,
+and duplicate simulated orders after retry.
 
 ## Technical Context
 
@@ -22,10 +23,16 @@ retry.
   stack unless implementation discovery demonstrates a concrete gap.
 - **Data model changes**: Add durable worker-run state and simulated purchase-order records with
   order lines, status, timestamps, and a run reference. Reuse product stock and stock-movement data
-  from `011-inventory-management`.
-- **Unknowns**: The feature depends on `011-inventory-management` being implemented first. Confirm
-  its final service/model APIs before coding this feature; do not assume the draft paths or contracts
-  are already present.
+  from the fully implemented `011-inventory-management`.
+- **Runtime**: Start the scheduler from the API bootstrap only when enabled; stop it during graceful
+  shutdown. Run it in the existing application container to share the API's local SQLite persistence.
+  Do not add a second long-running worker service. The standalone CLI is for one-shot controlled
+  runs only.
+- **Deployment constraint**: The scheduler assumes a single API process uses the SQLite database.
+  Horizontal scheduling across multiple API instances is out of scope unless a distributed lease is
+  designed.
+- **Unknowns**: None expected after `011-inventory-management` is fully implemented and its final
+  service/model APIs are confirmed.
 
 ## Constitution Check
 
@@ -62,7 +69,8 @@ packages/
 ├── agent/src/tools/                  # Inventory and simulated reorder tool contracts
 ├── api/src/models/                    # Durable worker-run and simulated order records
 ├── api/src/services/                  # Run persistence and simulated purchasing
-├── api/src/workers/                   # Scheduler and independently runnable worker entry
+├── api/src/workers/                   # Scheduler and one-shot CLI entry point
+├── api/src/index.ts                   # Optional scheduler lifecycle with API startup/shutdown
 ├── api/tests/                         # Worker, persistence, retry, and vulnerability tests
 └── web/src/publicPages.tsx            # Vulnerability catalog entries
 ```
@@ -72,13 +80,16 @@ during implementation. Do not add a user-facing assistant route or a real suppli
 
 ## Implementation Order
 
-1. Verify and implement against the completed inventory contracts from `011-inventory-management`.
+1. Complete `011-inventory-management` in full, including admin inventory operations, checkout
+   decrement/insufficient-stock behavior, concurrency protection, UI feedback, and tests. Confirm
+   the final inventory service and model contracts before starting 019.
 2. Add durable run and simulated purchase-order persistence, including an explicit retry/resume state
    model.
-3. Add dependency-injected inventory/reorder tools and a separate bounded headless agent loop; leave
+3. Add dependency-injected inventory/reorder tools and a dedicated bounded headless agent loop; leave
    the existing `AgentService.chat()` behavior unchanged.
-4. Add an independently runnable scheduled worker with lazy model configuration, structured status
-   reporting, and deterministic test injection.
+4. Add a configurable scheduler lifecycle to the API bootstrap, with lazy model configuration,
+   structured status reporting, graceful shutdown, and deterministic test injection. Add a one-shot
+   CLI entry point using the same worker path; do not add a second long-running container/service.
 5. Add focused worker, restart/retry, and simulated-supplier tests; then add intentional-vulnerability
    markers, regression tests, catalog entries, and exact `DEMO.md` demonstrations.
 6. Build affected workspaces and run focused API tests.
@@ -87,4 +98,4 @@ during implementation. Do not add a user-facing assistant route or a real suppli
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|---------------------------------------|
-| Separate worker entry point and durable job state | Scheduled work must continue independently of a chat/API request and be inspectable after restart. | Running the entire agent inside a request would not demonstrate headless execution or resumable jobs. |
+| Durable job state and a one-shot CLI entry point | Scheduled work must run independently of chat requests and remain inspectable after restart; the CLI enables a controlled run without starting a second long-lived process. | A separate container would complicate access to the API's SQLite database and create duplicate-scheduler/locking risks. |

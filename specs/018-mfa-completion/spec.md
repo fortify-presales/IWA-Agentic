@@ -1,6 +1,6 @@
 # Feature Specification: MFA Completion (Email, SMS, TOTP)
 
-**Status**: Implementing | **Branch**: `018-mfa-completion` | **Date**: 2026-10-01
+**Status**: Implemented | **Branch**: `018-mfa-completion` | **Date**: 2026-10-01
 **Input**: Complete the half-built multi-factor authentication feature end to end, with TOTP as the demo default, and add a set of intentionally insecure MFA patterns.
 
 ## Overview

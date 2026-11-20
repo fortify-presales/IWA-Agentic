@@ -1,6 +1,6 @@
 # Feature Specification: Product Reviews
 
-**Status**: Draft | **Branch**: `001-product-reviews` | **Date**: 2026-09-01
+**Status**: Implemented | **Branch**: `001-product-reviews` | **Date**: 2026-09-01
 **Input**: Historical feature request to add user-submitted product reviews with ratings.
 
 ## Overview

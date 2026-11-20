@@ -1,6 +1,6 @@
 # Feature Specification: MCP Agent Security Feasibility
 
-**Status**: Draft | **Branch**: `016-mcp-agent-tools` | **Date**: 2026-09-16  
+**Status**: Implemented | **Branch**: `016-mcp-agent-tools` | **Date**: 2026-09-16  
 **Input**: [GitHub issue #20](https://github.com/fortify-presales/IWA-NodeJS/issues/20) — evaluate exposing existing agent capabilities through MCP for additional Fortify SAST and FAA demonstrations.
 
 ## Overview

@@ -1,6 +1,6 @@
 # Feature Specification: Authentication and MFA
 
-**Status**: Draft | **Branch**: `006-auth-mfa` | **Date**: 2026-09-06
+**Status**: Implemented | **Branch**: `006-auth-mfa` | **Date**: 2026-09-06
 **Input**: Historical feature request to add registration, login, MFA, password reset, and session management.
 
 ## Overview

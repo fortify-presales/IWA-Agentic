@@ -1,6 +1,6 @@
 # Feature Specification: Fortify Demo Workflows
 
-**Status**: Draft | **Branch**: `main` | **Date**: 2026-09-08
+**Status**: Implemented | **Branch**: `main` | **Date**: 2026-09-08
 **Input**: Add demo vulnerabilities for `/fortify-change-review` and `/fortify-remediate`, including an Aviator-compatible remediation workaround.
 
 ## Overview

@@ -1,6 +1,6 @@
 # Feature Specification: Consolidated Agent Tool Expansion
 
-**Status**: Implementing | **Branch**: `017-agent-tool-expansion` | **Date**: 2026-09-21
+**Status**: Implemented | **Branch**: `017-agent-tool-expansion` | **Date**: 2026-09-21
 **Input**: Consolidate the live API agent around `AgentService` and add review-persistence and file-download tools for FAA/DAST demonstrations.
 
 ## Overview

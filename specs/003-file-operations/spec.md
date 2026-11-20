@@ -1,6 +1,6 @@
 # Feature Specification: File Operations
 
-**Status**: Draft | **Branch**: `003-file-operations` | **Date**: 2026-09-03
+**Status**: Implemented | **Branch**: `003-file-operations` | **Date**: 2026-09-03
 **Input**: Historical feature request to add account file upload, XML import, settings import, downloads, and admin backup restore workflows.
 
 ## Overview

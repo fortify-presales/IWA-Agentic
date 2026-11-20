@@ -1,6 +1,6 @@
 # Feature Specification: User Messaging
 
-**Status**: Draft | **Branch**: `007-messaging` | **Date**: 2026-09-07
+**Status**: Implemented | **Branch**: `007-messaging` | **Date**: 2026-09-07
 **Input**: Historical feature request to add user-to-admin messaging with unread counts and read status.
 
 ## Overview
