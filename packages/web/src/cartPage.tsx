@@ -1,6 +1,6 @@
 import React from 'react';
 import { CartItem, cartUpdatedEvent, clearCart, readCart, removeCartItem, replaceCart, serializeCart, updateCartItem } from './cart';
-import { getJson, Product } from './api';
+import { ApiResponse, getJson, Product } from './api';
 import { formatMoney } from './currency';
 
 type CartPageProps = {
@@ -22,13 +22,44 @@ function imageSrc(product: Product) {
 export function CartPage({ currency, user }: CartPageProps) {
   const [items, setItems] = React.useState<CartProduct[]>([]);
   const [status, setStatus] = React.useState('Loading cart');
+  const [checkoutError, setCheckoutError] = React.useState(
+    () => new URLSearchParams(window.location.search).get('error') ?? '',
+  );
+  const [checkingOut, setCheckingOut] = React.useState(false);
   const itemAdded = new URLSearchParams(window.location.search).get('added') === '1';
 
   React.useEffect(() => {
-    loadCartProducts().then((products) => {
-      setItems(products);
+    let ignore = false;
+    const requested = readCart();
+    loadCartProducts(requested).then((products) => {
+      if (ignore) return;
+      // Reconcile with the cart as it is now; it may have changed while products were loading.
+      const missing = new Set(requested.map(item => item.pid).filter(pid => !products.has(pid)));
+      const latest = readCart();
+      const kept = latest.filter(item => !missing.has(item.pid));
+      if (kept.length !== latest.length) replaceCart(kept);
+      setItems(kept.flatMap(item => {
+        const product = products.get(item.pid);
+        return product ? [{ ...product, quantity: item.quantity }] : [];
+      }));
       setStatus('');
-    }).catch((error: Error) => setStatus(error.message));
+    }).catch((error: Error) => {
+      if (!ignore) setStatus(error.message);
+    });
+
+    const syncQuantities = () => {
+      const quantities = new Map(readCart().map(item => [item.pid, item.quantity]));
+      setItems(current => current
+        .filter(item => quantities.has(item.id))
+        .map(item => ({ ...item, quantity: quantities.get(item.id) ?? item.quantity })));
+    };
+    window.addEventListener(cartUpdatedEvent, syncQuantities);
+    window.addEventListener('storage', syncQuantities);
+    return () => {
+      ignore = true;
+      window.removeEventListener(cartUpdatedEvent, syncQuantities);
+      window.removeEventListener('storage', syncQuantities);
+    };
   }, []);
 
   function setQuantity(pid: string, quantity: number) {
@@ -41,6 +72,28 @@ export function CartPage({ currency, user }: CartPageProps) {
     setItems((current) => current.filter((item) => item.id !== pid));
   }
 
+  async function checkout(event: React.FormEvent<HTMLFormElement>) {
+    if (!user) return;
+    event.preventDefault();
+    setCheckingOut(true);
+    setCheckoutError('');
+    try {
+      const response = await fetch('/cart/checkout', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams({ appReturnTo: '/app/cart', cartJson: serializeCart() }),
+      });
+      const payload = await response.json() as ApiResponse<{ redirect: string }>;
+      if (!response.ok || payload.status === 'error') throw new Error(payload.message || 'Checkout failed');
+      clearCart();
+      window.location.assign(payload.data.redirect);
+    } catch (error) {
+      setCheckoutError(error instanceof Error ? error.message : 'Checkout failed');
+      setCheckingOut(false);
+    }
+  }
+
   const total = items.reduce((sum, item) => sum + price(item) * item.quantity, 0);
 
   if (status) return <p className="status-line page-frame">{status}</p>;
@@ -49,6 +102,7 @@ export function CartPage({ currency, user }: CartPageProps) {
     <section className="page-frame content-page cart-page">
       <div className="page-kicker"><a href="/app/products">Shop</a> / <strong>Cart</strong></div>
       <h1>Shopping Cart</h1>
+      {checkoutError ? <div className="notice" role="alert">{checkoutError}</div> : null}
       {itemAdded ? <div className="notice cart-added" role="status">Item added to your cart.</div> : null}
       {items.length === 0 ? (
         <div className="notice">Your shopping cart is empty. <a href="/app/products">Continue Shopping</a></div>
@@ -73,10 +127,10 @@ export function CartPage({ currency, user }: CartPageProps) {
             <a className="button secondary outline" href="/app/products">Continue Shopping</a>
             <button className="button secondary outline" onClick={() => { clearCart(); setItems([]); }} type="button">Clear Cart</button>
             <div className="cart-total">Cart Total: <strong>{formatMoney(total, currency)}</strong></div>
-            <form method="POST" action="/cart/checkout" onSubmit={() => { if (user) clearCart(); }}>
+            <form method="POST" action="/cart/checkout" onSubmit={checkout}>
               <input type="hidden" name="appReturnTo" value="/app/cart" />
               <input type="hidden" name="cartJson" value={serializeCart()} />
-              <button type="submit">{user ? 'Proceed To Checkout' : 'Login To Checkout'}</button>
+              <button type="submit" disabled={checkingOut}>{checkingOut ? 'Checking out...' : user ? 'Proceed To Checkout' : 'Login To Checkout'}</button>
             </form>
           </div>
         </>
@@ -109,8 +163,7 @@ export function CartCount() {
   );
 }
 
-async function loadCartProducts() {
-  const cart = readCart();
+async function loadCartProducts(cart: CartItem[]) {
   const results = await Promise.all(cart.map(async (item: CartItem) => {
     try {
       return { item, product: await getJson<Product>(`/api/v3/products/${item.pid}`) };
@@ -118,9 +171,9 @@ async function loadCartProducts() {
       return null;
     }
   }));
-  const validResults = results.filter((result): result is { item: CartItem; product: Product } => result !== null);
-  if (validResults.length !== cart.length) {
-    replaceCart(validResults.map(({ item }) => item));
+  const products = new Map<string, Product>();
+  for (const result of results) {
+    if (result) products.set(result.item.pid, result.product);
   }
-  return validResults.map(({ item, product }) => ({ ...product, quantity: item.quantity }));
+  return products;
 }

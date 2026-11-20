@@ -1,6 +1,6 @@
 # Feature Specification: Inventory Management
 
-**Status**: Draft | **Branch**: `011-inventory-management` | **Date**: 2026-09-08
+**Status**: Implementing | **Branch**: `011-inventory-management` | **Date**: 2026-09-08
 **Input**: Future feature request to add inventory and stock management.
 
 ## Overview
@@ -41,6 +41,10 @@ Given an authenticated administrator, when they open inventory management, then 
 - **FR-004**: Checkout MUST reject orders when requested quantities exceed available stock.
 - **FR-005**: Stock adjustment APIs MUST require administrator authorization.
 - **FR-006**: Stock updates MUST be safe under concurrent checkout attempts.
+- **FR-007**: The default low-stock threshold MUST be 5; a product is low-stock at or below its threshold.
+- **FR-008**: Existing negative-quantity cart demonstrations MUST remain available, but negative
+  order lines MUST NOT add to stock or offset positive lines during stock accounting. Empty-cart API
+  orders MUST remain supported.
 
 ## Out of Scope
 

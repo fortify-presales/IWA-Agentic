@@ -5,6 +5,8 @@ import { seed } from './config/seed.js';
 import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './utils/logger.js';
+import { ensureInventorySchema } from './config/inventorySchema.js';
+import { User } from './models/User.js';
 
 // Ensure required directories exist
 ['./data', './logs', env.uploadDir, './data/restore'].forEach(d => {
@@ -17,9 +19,10 @@ async function bootstrap() {
     logger.info('Database connection established');
 
     await sequelize.sync({ force: env.isDevelopment || env.isTest });
+    await ensureInventorySchema();
     logger.info('Database synchronized');
 
-    await seed();
+    if (await User.count() === 0) await seed();
 
     const app = createApp();
     app.listen(env.port, () => {

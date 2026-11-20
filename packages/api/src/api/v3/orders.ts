@@ -4,6 +4,7 @@ import { requireRole } from '../../middleware/requireRole.js';
 import { orderService } from '../../services/OrderService.js';
 import { apiResponse } from '../../utils/web.js';
 import { env } from '../../config/env.js';
+import { InventoryError } from '../../services/InventoryService.js';
 
 const router = Router();
 
@@ -77,9 +78,13 @@ router.get('/:id', authenticateJwt, async (req: Request, res: Response, next: Ne
  */
 router.post('/', authenticateJwt, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const order = await orderService.create(req.body);
+    const user = req.user as { id: string };
+    const order = await orderService.create(req.body, user.id);
     res.status(201).json(apiResponse('success', 'Created', order));
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err instanceof InventoryError) return res.status(err.status).json(apiResponse('error', err.message));
+    next(err);
+  }
 });
 
 /**

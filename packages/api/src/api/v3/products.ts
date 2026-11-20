@@ -4,6 +4,7 @@ import { requireRole } from '../../middleware/requireRole.js';
 import { productService } from '../../services/ProductService.js';
 import { apiResponse } from '../../utils/web.js';
 import { buildPaginationMeta } from '../../utils/pagination.js';
+import { InventoryError, inventoryService } from '../../services/InventoryService.js';
 
 const router = Router();
 
@@ -124,7 +125,15 @@ router.get('/:id/image', async (req: Request, res: Response, next: NextFunction)
  */
 router.post('/', authenticateJwt, requireRole('ROLE_ADMIN', 'ROLE_API'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const product = await productService.create(req.body);
+    const stockLevel = req.body.stockLevel === undefined ? 0 : req.body.stockLevel;
+    const lowStockThreshold = req.body.lowStockThreshold === undefined ? 5 : req.body.lowStockThreshold;
+    if (!Number.isSafeInteger(stockLevel) || stockLevel < 0 ||
+        !Number.isSafeInteger(lowStockThreshold) || lowStockThreshold < 0) {
+      return res.status(400).json(apiResponse('error', 'Stock and threshold must be non-negative whole numbers'));
+    }
+    const product = await productService.create({
+      ...req.body, stockLevel, lowStockThreshold, inStock: stockLevel > 0,
+    });
     res.status(201).json(apiResponse('success', 'Created', product));
   } catch (err) { next(err); }
 });
@@ -152,9 +161,29 @@ router.post('/', authenticateJwt, requireRole('ROLE_ADMIN', 'ROLE_API'), async (
  */
 router.put('/:id', authenticateJwt, requireRole('ROLE_ADMIN', 'ROLE_API'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await productService.update(req.params.id, req.body);
+    const stockFields = ['stockLevel', 'lowStockThreshold', 'inStock'] as const;
+    if (stockFields.some(key => Object.hasOwn(req.body, key))) {
+      const user = req.user as { id: string; authorities?: Array<{ name: string }> };
+      if (user.authorities?.some(authority => authority.name === 'ROLE_ADMIN')) {
+        const product = await inventoryService.updateProduct(req.params.id, req.body, user.id);
+        return res.json(apiResponse('success', 'Updated', product));
+      }
+      const product = await productService.findById(req.params.id);
+      if (!product) return res.status(404).json(apiResponse('error', 'Not found'));
+      if (stockFields.some(key => Object.hasOwn(req.body, key) && req.body[key] !== product[key])) {
+        return res.status(403).json(apiResponse('error', 'Admin access required to adjust stock'));
+      }
+      const data = { ...req.body };
+      for (const key of stockFields) delete data[key];
+      await productService.update(req.params.id, data);
+    } else {
+      await productService.update(req.params.id, req.body);
+    }
     res.json(apiResponse('success', 'Updated', await productService.findById(req.params.id)));
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err instanceof InventoryError) return res.status(err.status).json(apiResponse('error', err.message));
+    next(err);
+  }
 });
 
 /**

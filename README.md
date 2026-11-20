@@ -92,6 +92,30 @@ Key endpoints:
 - `GET /api/v3/products` — Browse products
 - `GET /api/v3/users` — User management (auth required)
 
+### Inventory management
+
+Sign in as an administrator and open **Admin → Inventory** (`/app/admin/inventory`) to view stock,
+low-stock indicators, and movement history, or adjust a product's stock and threshold. A product is
+low-stock when its quantity is at or below its threshold; the default threshold is 5. Changes record
+the administrator, quantity change, and resulting stock. A stale adjustment is rejected so the
+administrator can refresh before retrying.
+
+The admin-session endpoints are `GET /api/v3/admin/inventory`,
+`GET /api/v3/admin/inventory/:productId/movements`, and `PUT /api/v3/admin/inventory/:productId`.
+The PUT body contains non-negative integers `stockLevel`, `lowStockThreshold`, and
+`expectedStockLevel` (the value last read). Administrators can also change stock through the
+existing bearer-authenticated product update endpoint; these changes are recorded in the same
+history, and `inStock` must agree with the resulting quantity. API-role users cannot change stock.
+The inventory endpoints reject cross-origin browser requests, independently of the application's
+intentionally insecure global CSRF configuration.
+
+Checkout records positive-quantity stock movements atomically with the order and rejects
+insufficient stock. Rejected checkout preserves cart quantities so the customer can adjust and retry.
+The intentionally vulnerable negative-quantity cart demonstration is preserved:
+negative lines still affect the order total but never increase stock. Existing API orders with an
+empty cart remain supported. Existing SQLite databases receive the threshold column on startup;
+initial demo data is seeded only when no users exist.
+
 ## AI Assistant (Olive) Browser Setup
 
 The `/app/assistant/setup` page saves an OpenAI API key in browser `localStorage` for demos. The `/app/assistant` page reads the saved browser key and sends it to `POST /api/v3/agent/chat` as `X-OpenAI-API-Key`.

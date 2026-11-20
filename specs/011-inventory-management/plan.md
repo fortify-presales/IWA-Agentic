@@ -12,7 +12,13 @@ Add secure inventory management for administrators, including product stock data
 
 - **Affected packages**: `@iwa/api`, `@iwa/web`
 - **Dependencies added/changed**: none expected
-- **Data model changes**: Add stock quantity/threshold fields and a stock movement model.
+- **Data model changes**: Reuse `Product.stockLevel`, add a low-stock threshold (default 5), and
+  record stock movements. Add the threshold to existing SQLite databases without deleting data.
+- **Checkout compatibility**: Preserve the documented negative-quantity demonstration without
+  allowing negative lines to increase stock, and retain empty-cart API orders.
+- **Administration**: Session-authenticated admins use the inventory UI/API; bearer-authenticated
+  admins may also adjust stock through the existing product update API with a movement record.
+  `ROLE_API` cannot change stock fields.
 - **Unknowns**: none
 
 ## Constitution Check
