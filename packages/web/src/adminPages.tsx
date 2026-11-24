@@ -13,7 +13,7 @@ import {
   ShoppingBagIcon,
   UsersIcon,
 } from '@heroicons/react/24/outline';
-import { getJson } from './api';
+import { getJson, putJson, Product } from './api';
 import { formatMoney } from './currency';
 
 type AdminProps = {
@@ -82,6 +82,7 @@ export function AdminRoute({ currency }: AdminProps) {
   if (!summary) return <AdminGate message="Admin data unavailable" />;
 
   if (path === '/app/admin/users') return <UsersPage summary={summary} />;
+  if (path === '/app/admin/inventory') return <InventoryPage />;
   if (path === '/app/admin/products') return <ProductsPage currency={currency} summary={summary} />;
   if (path === '/app/admin/orders') return <OrdersPage currency={currency} summary={summary} />;
   if (path === '/app/admin/reviews') return <ReviewsPage summary={summary} />;
@@ -119,6 +120,7 @@ function Dashboard({ summary }: { summary: AdminSummary }) {
       <div className="admin-actions">
         <AdminAction href="/app/admin/users" label="Users" icon={UsersIcon} />
         <AdminAction href="/app/admin/products" label="Products" icon={ShoppingBagIcon} />
+        <AdminAction href="/app/admin/inventory" label="Inventory" icon={ArchiveBoxIcon} />
         <AdminAction href="/app/admin/orders" label="Orders" icon={ClipboardDocumentListIcon} />
         <AdminAction href="/app/admin/reviews" label="Reviews" icon={ClipboardDocumentCheckIcon} />
         <AdminAction href="/app/admin/messages" label="Messages" icon={ChatBubbleLeftRightIcon} />
@@ -176,6 +178,119 @@ function UsersPage({ summary }: { summary: AdminSummary }) {
 
 function ProductsPage({ currency, summary }: AdminProps & { summary: AdminSummary }) {
   return <TablePage title="Product Management" headers={['Code', 'Name', 'Price', 'In Stock']} rows={summary.products.map((product) => [product.code, product.name, formatMoney(product.price, currency), product.inStock ? 'Yes' : 'No'])} />;
+}
+
+type StockMovement = {
+  id: string;
+  type: 'adjustment' | 'checkout';
+  change: number;
+  stockAfter: number;
+  orderId: string | null;
+  userId: string | null;
+  createdAt: string;
+};
+
+function InventoryPage() {
+  const [products, setProducts] = React.useState<Product[]>([]);
+  const [status, setStatus] = React.useState('Loading inventory');
+  const [history, setHistory] = React.useState<{ name: string; movements: StockMovement[] } | null>(null);
+
+  React.useEffect(() => {
+    getJson<Product[]>('/api/v3/admin/inventory')
+      .then(data => { setProducts(data); setStatus(''); })
+      .catch((error: Error) => setStatus(error.message));
+  }, []);
+
+  async function showHistory(product: Product) {
+    try {
+      const movements = await getJson<StockMovement[]>(`/api/v3/admin/inventory/${encodeURIComponent(product.id)}/movements`);
+      setHistory({ name: product.name, movements });
+      setStatus('');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Unable to load stock history');
+    }
+  }
+
+  return (
+    <section className="page-frame content-page admin-page">
+      <AdminBreadcrumb current="Inventory" />
+      <h1>Inventory Management</h1>
+      {status ? <p role="status">{status}</p> : null}
+      <DataTable headers={['Code', 'Product', 'Stock', 'Low-stock threshold', 'Status', 'Actions']}>
+        {products.map(product => (
+          <InventoryRow key={product.id} product={product} onHistory={showHistory} onSaved={updated => {
+            setProducts(current => current.map(item => item.id === updated.id ? updated : item));
+            setHistory(null);
+          }} />
+        ))}
+      </DataTable>
+      {history ? (
+        <section>
+          <h2>Stock history: {history.name}</h2>
+          {history.movements.length === 0 ? <p>No stock movements yet.</p> : (
+            <DataTable headers={['Date', 'Type', 'Change', 'Stock after', 'Order', 'User']}>
+              {history.movements.map(movement => (
+                <tr key={movement.id}>
+                  <td>{new Date(movement.createdAt).toLocaleString()}</td>
+                  <td>{movement.type}</td>
+                  <td>{movement.change}</td>
+                  <td>{movement.stockAfter}</td>
+                  <td>{movement.orderId ?? '—'}</td>
+                  <td>{movement.userId ?? '—'}</td>
+                </tr>
+              ))}
+            </DataTable>
+          )}
+        </section>
+      ) : null}
+    </section>
+  );
+}
+
+function InventoryRow({ product, onHistory, onSaved }: {
+  product: Product;
+  onHistory: (product: Product) => void;
+  onSaved: (product: Product) => void;
+}) {
+  const [stock, setStock] = React.useState(String(product.stockLevel));
+  const [threshold, setThreshold] = React.useState(String(product.lowStockThreshold));
+  const [message, setMessage] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+
+  async function save() {
+    if (!/^\d+$/.test(stock) || !/^\d+$/.test(threshold)) {
+      setMessage('Enter non-negative whole numbers');
+      return;
+    }
+    setSaving(true);
+    try {
+      const { token } = await getJson<{ token: string }>('/api/v3/admin/inventory/csrf-token');
+      const updated = await putJson<Product>(`/api/v3/admin/inventory/${encodeURIComponent(product.id)}`, {
+        stockLevel: Number(stock), lowStockThreshold: Number(threshold), expectedStockLevel: product.stockLevel,
+      }, token);
+      onSaved(updated);
+      setMessage('Saved');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to update inventory');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <tr>
+      <td>{product.code}</td>
+      <td>{product.name}</td>
+      <td><input aria-label={`Stock for ${product.name}`} min="0" step="1" type="number" value={stock} onChange={event => setStock(event.target.value)} /></td>
+      <td><input aria-label={`Low-stock threshold for ${product.name}`} min="0" step="1" type="number" value={threshold} onChange={event => setThreshold(event.target.value)} /></td>
+      <td>{product.stockLevel <= product.lowStockThreshold ? 'Low stock' : 'In stock'}</td>
+      <td>
+        <button type="button" disabled={saving} onClick={save}>Save</button>{' '}
+        <button type="button" onClick={() => onHistory(product)}>History</button>
+        {message ? <p role="status">{message}</p> : null}
+      </td>
+    </tr>
+  );
 }
 
 function OrdersPage({ currency, summary }: AdminProps & { summary: AdminSummary }) {

@@ -6,6 +6,7 @@ import { Order } from '../../models/Order.js';
 import { Review } from '../../models/Review.js';
 import { Message } from '../../models/Message.js';
 import { apiResponse } from '../../utils/web.js';
+import { inventoryRouter } from './inventory.js';
 
 const router = Router();
 
@@ -20,6 +21,8 @@ router.use((req: Request, res: Response, next: NextFunction) => {
   }
   next();
 });
+
+router.use('/inventory', inventoryRouter);
 
 router.get('/summary', async (req: Request, res: Response, next: NextFunction) => {
   try {

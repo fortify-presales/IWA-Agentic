@@ -12,7 +12,17 @@ Add secure inventory management for administrators, including product stock data
 
 - **Affected packages**: `@iwa/api`, `@iwa/web`
 - **Dependencies added/changed**: none expected
-- **Data model changes**: Add stock quantity/threshold fields and a stock movement model.
+- **Data model changes**: Reuse `Product.stockLevel`, add a low-stock threshold (default 5), and
+  record stock movements. Add the threshold to existing SQLite databases without deleting data.
+- **Checkout compatibility**: Preserve the documented negative-quantity demonstration without
+  allowing negative lines to increase stock, and retain empty-cart API orders.
+- **Administration**: Session-authenticated admins use the inventory UI/API; bearer-authenticated
+  admins may also adjust stock through the existing product update API with a movement record.
+  `ROLE_API` cannot change stock fields. Session-authenticated inventory PUT requests require the
+  session-bound token returned by `GET /api/v3/admin/inventory/csrf-token` in the `X-CSRF-Token`
+  header. The token endpoint is not cross-origin-readable or cacheable, even with the intentionally
+  permissive global CORS policy. The check is enforced in the HTTP route only, not in
+  `InventoryService`, so in-process callers such as the 019 headless worker are unaffected.
 - **Unknowns**: none
 
 ## Constitution Check

@@ -3,6 +3,7 @@ import { Order } from '../models/Order.js';
 import { User } from '../models/User.js';
 import { paginate } from '../utils/pagination.js';
 import { env } from '../config/env.js';
+import type { Transaction } from 'sequelize';
 
 export class OrderRepository {
   async findAll(page = 1, size = env.pageSize): Promise<{ rows: Order[]; count: number }> {
@@ -25,8 +26,8 @@ export class OrderRepository {
     });
   }
 
-  async create(data: Partial<Order>): Promise<Order> {
-    return Order.create(data as any);
+  async create(data: Partial<Order>, transaction?: Transaction): Promise<Order> {
+    return Order.create(data as any, { transaction });
   }
 
   async update(id: string, data: Partial<Order>): Promise<[number]> {

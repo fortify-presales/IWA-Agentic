@@ -61,7 +61,7 @@ When you change a spec's status, update its `**Status**` line and this index in 
 | [008](008-wishlist-favorites/spec.md) | Wishlist and Favorites | Draft | Yes | |
 | [009](009-discount-codes/spec.md) | Discount Codes and Promotions | Draft | Yes | |
 | [010](010-returns-refunds/spec.md) | Returns and Refunds | Draft | Yes | |
-| [011](011-inventory-management/spec.md) | Inventory Management | Draft | No | Prerequisite for 019. |
+| [011](011-inventory-management/spec.md) | Inventory Management | Implementing | No | Prerequisite for 019. |
 | [012](012-notification-templates/spec.md) | Notification Templates | Draft | Yes | |
 | [013](013-agentic-excessive-agency/spec.md) | Agentic Excessive Agency Demonstration | Implemented | Yes | |
 | [014](014-business-data-prompt-injection/spec.md) | Indirect Prompt Injection Through Business Data | Implemented | Yes | |

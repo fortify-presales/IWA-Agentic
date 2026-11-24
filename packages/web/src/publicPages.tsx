@@ -63,7 +63,7 @@ const vulnerabilities = [
   ['CWE-1035', 'mongo-express 0.49.0 - CVE-2019-10758 (CISA KEV, RCE)', 'package.json (installed but not started by docker-compose)', 'SCA', 'Verify the CISA KEV RCE advisory; component is not part of the application runtime'],
   ['CWE-1035', 'save-dev 0.0.1-security - GHSA-7fhm-3j9v-2x4c (Malware, ACE)', 'package.json / npm install lifecycle', 'SCA', 'Installation-time malware/arbitrary-code-execution finding; not an application request path'],
   ['CWE-1321', 'Prototype Pollution', 'packages/api/src/utils/deepMerge.ts, POST /user/edit-profile', 'DAST, FAA', '{"__proto__":{"polluted":true}}'],
-  ['CWE-915', 'Mass Assignment', 'PUT /api/v3/users/:id, /api/v3/orders, /api/v3/reviews, /api/v3/messages', 'DAST, FAA', '{"enabled":false,"locked":true}'],
+  ['CWE-915', 'Mass Assignment', 'PUT /api/v3/users/:id, POST and PUT /api/v3/orders, /api/v3/reviews, /api/v3/messages', 'DAST, FAA', '{"enabled":false,"locked":true}; POST /api/v3/orders with another user\'s userId and "shipped":true'],
   ['CWE-915', 'MFA Secret Mass Assignment', 'POST /user/edit-profile, /app/user/edit-profile', 'SAST, DAST, FAA', 'Submit mfaType=MFA_APP and mfaSecret=JBSWY3DPEHPK3PXP to overwrite your account MFA secret'],
   ['CWE-95', 'Code Injection via eval', 'POST /admin/diagnostics, /app/admin/diagnostics', 'SAST, DAST', "expr=require('child_process').execSync('id')"],
   ['CWE-918', 'SSRF', 'POST /admin/diagnostics, /app/admin/diagnostics; fetch_url agent tool', 'DAST, FAA', 'url=http://169.254.169.254/latest/meta-data/'],
@@ -97,6 +97,7 @@ const vulnerabilities = [
   ['CWE-693', 'Security Header Misconfiguration', 'packages/api/src/config/security.ts', 'FAA', 'Inspect responses for disabled CSP, COEP and COOP protections'],
   ['CWE-922', 'Sensitive Data Stored in Browser', 'packages/web/src/agentpage.tsx', 'FAA', 'Inspect browser localStorage after entering an OpenAI API key in the assistant'],
   ['CWE-472', 'Cart Quantity Tampering', 'POST /cart or checkout flow in packages/api/src/web/cart.ts', 'FAA', 'Submit a negative cart quantity and inspect the calculated order amount'],
+  ['CWE-840', 'Restricted Medicine Ordering Without Checks', 'POST /api/v3/orders, POST /cart/checkout; packages/api/src/services/OrderService.ts', 'FAA', 'Order a controlled, pharmacy-only, 18+ product (e.g. Codeine Phosphate 8mg) as a normal user with no prescription, consultation or age check'],
   ['CWE-400', 'Unbounded Pagination', 'packages/api/src/utils/pagination.ts and paginated API routes', 'FAA', 'Request an extremely large page size or negative page/size'],
 ];
 

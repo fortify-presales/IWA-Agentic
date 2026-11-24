@@ -26,6 +26,7 @@ export type Product = {
   commonUses: string[];
   keywords: string[];
   stockLevel: number;
+  lowStockThreshold: number;
   featured: boolean;
   bestseller: boolean;
   alternativeProducts: string[];
@@ -65,6 +66,20 @@ export type Review = {
 
 export async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { credentials: 'include' });
+  const payload = (await response.json()) as ApiResponse<T>;
+  if (!response.ok || payload.status === 'error') {
+    throw new Error(payload.message || `Request failed: ${response.status}`);
+  }
+  return payload.data;
+}
+
+export async function putJson<T>(path: string, data: object, csrfToken: string): Promise<T> {
+  const response = await fetch(path, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(data),
+  });
   const payload = (await response.json()) as ApiResponse<T>;
   if (!response.ok || payload.status === 'error') {
     throw new Error(payload.message || `Request failed: ${response.status}`);

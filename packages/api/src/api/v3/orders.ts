@@ -4,6 +4,7 @@ import { requireRole } from '../../middleware/requireRole.js';
 import { orderService } from '../../services/OrderService.js';
 import { apiResponse } from '../../utils/web.js';
 import { env } from '../../config/env.js';
+import { InventoryError } from '../../services/InventoryService.js';
 
 const router = Router();
 
@@ -75,11 +76,18 @@ router.get('/:id', authenticateJwt, async (req: Request, res: Response, next: Ne
  *       201:
  *         description: Order created
  */
+// INSECURE: binds the entire request body into the new order, including userId, id, orderNum and shipping state (CWE-915)
+// Purpose: demonstrates mass assignment / forged order ownership detected by Fortify Agentic Analyzer (FAA)
+// Fix: Allowlist client-editable fields, set userId from the authenticated token, and generate id/orderNum/shipping state server-side
 router.post('/', authenticateJwt, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const order = await orderService.create(req.body);
+    const user = req.user as { id: string };
+    const order = await orderService.create(req.body, user.id);
     res.status(201).json(apiResponse('success', 'Created', order));
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err instanceof InventoryError) return res.status(err.status).json(apiResponse('error', err.message));
+    next(err);
+  }
 });
 
 /**

@@ -74,6 +74,10 @@ export class Product extends Model {
   @Column(DataType.INTEGER)
   declare stockLevel: number;
 
+  @Default(5)
+  @Column(DataType.INTEGER)
+  declare lowStockThreshold: number;
+
   @Default(false)
   @Column(DataType.BOOLEAN)
   declare featured: boolean;
