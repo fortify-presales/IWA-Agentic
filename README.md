@@ -103,7 +103,8 @@ administrator can refresh before retrying.
 The admin-session endpoints are `GET /api/v3/admin/inventory`,
 `GET /api/v3/admin/inventory/:productId/movements`, and `PUT /api/v3/admin/inventory/:productId`.
 The PUT body contains non-negative integers `stockLevel`, `lowStockThreshold`, and
-`expectedStockLevel` (the value last read). Administrators can also change stock through the
+`expectedStockLevel` (the value last read), and the request must send the session-bound token from
+`GET /api/v3/admin/inventory/csrf-token` in the `X-CSRF-Token` header. Administrators can also change stock through the
 existing bearer-authenticated product update endpoint; these changes are recorded in the same
 history, and `inStock` must agree with the resulting quantity. API-role users cannot change stock.
 The inventory endpoints reject cross-origin browser requests, independently of the application's

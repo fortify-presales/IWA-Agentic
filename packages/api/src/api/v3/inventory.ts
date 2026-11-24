@@ -1,7 +1,14 @@
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Router, Request, Response, NextFunction } from 'express';
 import { InventoryError, inventoryService } from '../../services/InventoryService.js';
 import { apiResponse } from '../../utils/web.js';
 import { logger } from '../../utils/logger.js';
+
+declare module 'express-session' {
+  interface SessionData {
+    inventoryCsrfToken?: string;
+  }
+}
 
 const router = Router();
 
@@ -21,6 +28,26 @@ router.use((req: Request, res: Response, next: NextFunction) => {
     if (host !== req.get('host')) return res.status(403).json(apiResponse('error', 'Invalid request origin'));
   }
   next();
+});
+
+/**
+ * @openapi
+ * /admin/inventory/csrf-token:
+ *   get:
+ *     tags: [Inventory]
+ *     summary: Get the session-bound token required for inventory updates
+ *     responses:
+ *       200:
+ *         description: CSRF token for the current administrator session
+ */
+router.get('/csrf-token', (req: Request, res: Response) => {
+  const token = req.session.inventoryCsrfToken ?? randomBytes(32).toString('hex');
+  req.session.inventoryCsrfToken = token;
+  // The global CORS policy reflects origins; this secret must remain same-origin.
+  res.removeHeader('Access-Control-Allow-Origin');
+  res.removeHeader('Access-Control-Allow-Credentials');
+  res.set('Cache-Control', 'no-store');
+  res.json(apiResponse('success', 'OK', { token }));
 });
 
 /**
@@ -72,6 +99,10 @@ router.get('/:productId/movements', async (req: Request, res: Response) => {
  *         name: productId
  *         required: true
  *         schema: { type: string }
+ *       - in: header
+ *         name: X-CSRF-Token
+ *         required: true
+ *         schema: { type: string }
  *     requestBody:
  *       required: true
  *       content:
@@ -86,10 +117,18 @@ router.get('/:productId/movements', async (req: Request, res: Response) => {
  *     responses:
  *       200:
  *         description: Inventory updated
+ *       403:
+ *         description: Missing or invalid CSRF token
  *       409:
  *         description: Stock changed since it was loaded
  */
 router.put('/:productId', async (req: Request, res: Response) => {
+  const token = req.get('X-CSRF-Token');
+  const expected = req.session.inventoryCsrfToken;
+  if (!token || !expected || !/^[0-9a-f]{64}$/.test(token) || !/^[0-9a-f]{64}$/.test(expected) ||
+      !timingSafeEqual(Buffer.from(token, 'hex'), Buffer.from(expected, 'hex'))) {
+    return res.status(403).json(apiResponse('error', 'Invalid inventory request token'));
+  }
   try {
     const user = req.user as { id: string };
     const product = await inventoryService.adjust(

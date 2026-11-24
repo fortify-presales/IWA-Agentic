@@ -264,9 +264,10 @@ function InventoryRow({ product, onHistory, onSaved }: {
     }
     setSaving(true);
     try {
+      const { token } = await getJson<{ token: string }>('/api/v3/admin/inventory/csrf-token');
       const updated = await putJson<Product>(`/api/v3/admin/inventory/${encodeURIComponent(product.id)}`, {
         stockLevel: Number(stock), lowStockThreshold: Number(threshold), expectedStockLevel: product.stockLevel,
-      });
+      }, token);
       onSaved(updated);
       setMessage('Saved');
     } catch (error) {

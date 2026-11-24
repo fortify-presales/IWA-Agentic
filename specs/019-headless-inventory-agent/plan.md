@@ -28,6 +28,9 @@ and duplicate simulated orders after retry.
   shutdown. Run it in the existing application container to share the API's local SQLite persistence.
   Do not add a second long-running worker service. The standalone CLI is for one-shot controlled
   runs only.
+- **Inventory access**: The worker calls `InventoryService` in-process. It does not call the
+  session-authenticated admin inventory HTTP routes, so their CSRF token requirement from 011
+  FR-009 does not apply or constrain the intentional CWE-862 demonstration.
 - **Deployment constraint**: The scheduler assumes a single API process uses the SQLite database.
   Horizontal scheduling across multiple API instances is out of scope unless a distributed lease is
   designed.

@@ -45,6 +45,12 @@ Given an authenticated administrator, when they open inventory management, then 
 - **FR-008**: Existing negative-quantity cart demonstrations MUST remain available, but negative
   order lines MUST NOT add to stock or offset positive lines during stock accounting. Empty-cart API
   orders MUST remain supported.
+- **FR-009**: Session-authenticated `PUT /api/v3/admin/inventory/:productId` requests MUST include
+  a session-bound CSRF token obtained from `GET /api/v3/admin/inventory/csrf-token` in the
+  `X-CSRF-Token` header. The token response MUST not be cached or readable by cross-origin scripts.
+  This applies only to that HTTP route; in-process `InventoryService` callers (for example the
+  `019-headless-inventory-agent` worker) and the bearer-authenticated product update API are
+  unaffected.
 
 ## Out of Scope
 

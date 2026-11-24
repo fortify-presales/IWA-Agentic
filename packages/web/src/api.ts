@@ -73,11 +73,11 @@ export async function getJson<T>(path: string): Promise<T> {
   return payload.data;
 }
 
-export async function putJson<T>(path: string, data: object): Promise<T> {
+export async function putJson<T>(path: string, data: object, csrfToken: string): Promise<T> {
   const response = await fetch(path, {
     method: 'PUT',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
     body: JSON.stringify(data),
   });
   const payload = (await response.json()) as ApiResponse<T>;

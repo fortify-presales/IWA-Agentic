@@ -118,7 +118,9 @@ test('admin inventory adjustments and insufficient-stock checkout feedback', asy
   const row = page.locator('tr').filter({ hasText: 'Paracetamol 500mg Tablets' });
   await row.getByLabel('Stock for Paracetamol 500mg Tablets').fill('1');
   await row.getByLabel('Low-stock threshold for Paracetamol 500mg Tablets').fill('5');
+  const updateRequest = page.waitForRequest(request => request.method() === 'PUT' && request.url().includes('/api/v3/admin/inventory/'));
   await row.getByRole('button', { name: 'Save' }).click();
+  expect((await updateRequest).headers()['x-csrf-token']).toMatch(/^[0-9a-f]{64}$/);
   await expect(row.getByRole('status')).toHaveText('Saved');
   await expect(row).toContainText('Low stock');
   await row.getByRole('button', { name: 'History' }).click();

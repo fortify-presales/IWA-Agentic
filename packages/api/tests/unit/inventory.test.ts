@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import cors from 'cors';
 import express from 'express';
+import session from 'express-session';
 import jwt from 'jsonwebtoken';
 import passport from 'passport';
 import request from 'supertest';
@@ -56,13 +58,14 @@ describe('inventory management', () => {
     apiToken = jwt.sign({ sub: apiUser.id }, env.jwtSecret, { algorithm: 'HS512' });
     configurePassport();
     app = express();
+    app.use(cors({ origin: true, credentials: true }));
+    app.use(session({ secret: 'inventory-test-secret', resave: false, saveUninitialized: false }));
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
     app.use((req, _res, next) => {
       const role = req.get('x-test-role');
       req.isAuthenticated = () => Boolean(role);
       if (role) req.user = { id: userId, authorities: [{ name: role }] };
-      req.session = { cart: [] } as unknown as typeof req.session;
       next();
     });
     app.use(passport.initialize());
@@ -84,6 +87,7 @@ describe('inventory management', () => {
   it('limits inventory reads, changes, and history to administrators', async () => {
     const item = await product('Admin item', 10);
     const base = `/api/v3/admin/inventory/${item.id}`;
+    const admin = request.agent(app);
     expect((await request(app).get('/api/v3/admin/inventory')).status).toBe(401);
     expect((await request(app).get('/api/v3/admin/inventory').set('x-test-role', 'ROLE_USER')).status).toBe(403);
     expect((await request(app).put(base).set('x-test-role', 'ROLE_USER').send({
@@ -91,7 +95,9 @@ describe('inventory management', () => {
     })).status).toBe(403);
     expect((await request(app).get(`${base}/movements`).set('x-test-role', 'ROLE_USER')).status).toBe(403);
 
-    const response = await request(app).put(base).set('x-test-role', 'ROLE_ADMIN').send({
+    const tokenResponse = await admin.get('/api/v3/admin/inventory/csrf-token').set('x-test-role', 'ROLE_ADMIN');
+    const token = tokenResponse.body.data.token as string;
+    const response = await admin.put(base).set('x-test-role', 'ROLE_ADMIN').set('X-CSRF-Token', token).send({
       stockLevel: 3, lowStockThreshold: 4, expectedStockLevel: 10,
     });
     expect(response.status).toBe(200);
@@ -100,20 +106,53 @@ describe('inventory management', () => {
     expect(history.body.data).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'adjustment', change: -7, stockAfter: 3, userId }),
     ]));
-    const invalid = await request(app).put(base).set('x-test-role', 'ROLE_ADMIN').send({
+    const invalid = await admin.put(base).set('x-test-role', 'ROLE_ADMIN').set('X-CSRF-Token', token).send({
       stockLevel: -1, lowStockThreshold: 4, expectedStockLevel: 3,
     });
     expect(invalid.status).toBe(400);
     expect((await item.reload()).stockLevel).toBe(3);
-    const crossOrigin = await request(app).put(base).set('x-test-role', 'ROLE_ADMIN')
+    const crossOrigin = await admin.put(base).set('x-test-role', 'ROLE_ADMIN').set('X-CSRF-Token', token)
       .set('Origin', 'https://other.example').send({ stockLevel: 20, lowStockThreshold: 4, expectedStockLevel: 3 });
     expect(crossOrigin.status).toBe(403);
     expect((await request(app).get(`${base}/movements`).set('x-test-role', 'ROLE_ADMIN')
       .set('Origin', 'https://other.example')).status).toBe(403);
-    const stale = await request(app).put(base).set('x-test-role', 'ROLE_ADMIN').send({
+    const stale = await admin.put(base).set('x-test-role', 'ROLE_ADMIN').set('X-CSRF-Token', token).send({
       stockLevel: 20, lowStockThreshold: 4, expectedStockLevel: 10,
     });
     expect(stale.status).toBe(409);
+    expect((await item.reload()).stockLevel).toBe(3);
+  });
+
+  it('requires a session-bound inventory token and does not expose it through CORS', async () => {
+    const item = await product('CSRF item', 10);
+    const base = `/api/v3/admin/inventory/${item.id}`;
+    const admin = request.agent(app);
+    const otherAdmin = request.agent(app);
+    const data = { stockLevel: 3, lowStockThreshold: 5, expectedStockLevel: 10 };
+
+    expect((await request(app).get('/api/v3/admin/inventory/csrf-token')).status).toBe(401);
+    expect((await request(app).get('/api/v3/admin/inventory/csrf-token').set('x-test-role', 'ROLE_USER')).status).toBe(403);
+    const tokenResponse = await admin.get('/api/v3/admin/inventory/csrf-token').set('x-test-role', 'ROLE_ADMIN');
+    const token = tokenResponse.body.data.token as string;
+    expect((await admin.get('/api/v3/admin/inventory/csrf-token').set('x-test-role', 'ROLE_ADMIN')).body.data.token).toBe(token);
+    const otherTokenResponse = await otherAdmin.get('/api/v3/admin/inventory/csrf-token').set('x-test-role', 'ROLE_ADMIN');
+    const otherToken = otherTokenResponse.body.data.token as string;
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(otherToken).not.toBe(token);
+
+    expect((await admin.put(base).set('x-test-role', 'ROLE_ADMIN').send(data)).status).toBe(403);
+    expect((await admin.put(base).set('x-test-role', 'ROLE_ADMIN').set('X-CSRF-Token', 'invalid').send(data)).status).toBe(403);
+    expect((await admin.put(base).set('x-test-role', 'ROLE_ADMIN').set('X-CSRF-Token', otherToken).send(data)).status).toBe(403);
+    expect((await item.reload()).stockLevel).toBe(10);
+
+    const crossOrigin = await request(app).get('/api/v3/admin/inventory/csrf-token')
+      .set('x-test-role', 'ROLE_ADMIN').set('Host', 'example.test').set('Origin', 'https://example.test');
+    expect(crossOrigin.status).toBe(200);
+    expect(crossOrigin.headers['access-control-allow-origin']).toBeUndefined();
+    expect(crossOrigin.headers['access-control-allow-credentials']).toBeUndefined();
+    expect(crossOrigin.headers['cache-control']).toBe('no-store');
+
+    expect((await admin.put(base).set('x-test-role', 'ROLE_ADMIN').set('X-CSRF-Token', token).send(data)).status).toBe(200);
     expect((await item.reload()).stockLevel).toBe(3);
   });
 
