@@ -76,6 +76,9 @@ router.get('/:id', authenticateJwt, async (req: Request, res: Response, next: Ne
  *       201:
  *         description: Order created
  */
+// INSECURE: binds the entire request body into the new order, including userId, id, orderNum and shipping state (CWE-915)
+// Purpose: demonstrates mass assignment / forged order ownership detected by Fortify Agentic Analyzer (FAA)
+// Fix: Allowlist client-editable fields, set userId from the authenticated token, and generate id/orderNum/shipping state server-side
 router.post('/', authenticateJwt, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const user = req.user as { id: string };

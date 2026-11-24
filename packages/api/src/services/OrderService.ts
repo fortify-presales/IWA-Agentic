@@ -36,6 +36,9 @@ export class OrderService {
     return orderRepository.findByUser(userId);
   }
 
+  // INSECURE: orders restricted products without prescription, controlled-medicine, consultation, pharmacy-only or age checks (CWE-840)
+  // Purpose: demonstrates a business-logic authorization gap detected by Fortify Agentic Analyzer (FAA)
+  // Fix: Load each ordered product and reject or hold restricted lines until the required prescription, consultation, age and pharmacist approval are verified
   async create(data: Partial<Order>, actorId: string | null = null) {
     const lines = orderLines(data.cart);
     const orderData = { id: uuidv4(), ...data };
