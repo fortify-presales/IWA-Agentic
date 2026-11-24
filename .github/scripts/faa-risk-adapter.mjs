@@ -3,7 +3,7 @@
  * Fortify Agentic Analyzer (FAA) scan. Dependency-free; needs Node 20+ and Git.
  *
  * HOW IT WORKS
- *   1. Reads the GitHub pull_request event (labels, body) and the policy JSON.
+ *   1. Reads the GitHub pull_request event (labels, body, author) and policy JSON.
  *   2. Lists changed files/lines between merge-base(base, head) and head.
  *   3. Adds the points of every matching policy rule. FAA is selected when
  *      score >= threshold, the PR changes (not only deletes) files, and the PR
@@ -25,7 +25,7 @@
  *
  * CUSTOMIZING
  *   Edit the policy, not this script. Rule types (see _instructions in the policy):
- *     label | paths | declaration | minChangedLines
+ *     label | paths | declaration | botAuthor | minChangedLines
  *   To add a new rule type, add one case to ruleEvidence() returning the
  *   evidence strings that matched (an empty array means no match), and allow its
  *   key in conditionKeys.
@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const usage = 'Usage: node faa-risk-adapter.mjs --source <checkout-at-pr-head> --output <dir> [--policy <policy.json>] [--event <event.json>]';
-const conditionKeys = ['label', 'paths', 'declaration', 'minChangedLines'];
+const conditionKeys = ['label', 'paths', 'declaration', 'botAuthor', 'minChangedLines'];
 
 function check(condition, message) {
   if (!condition) throw new Error(message);
@@ -62,6 +62,11 @@ export function validatePolicy(policy) {
     if (rule.declaration) {
       check(typeof rule.declaration.field === 'string' && Array.isArray(rule.declaration.values),
         `Rule "${rule.name}": declaration needs field and values`);
+    }
+    if ('botAuthor' in rule) {
+      check(Array.isArray(rule.botAuthor) && rule.botAuthor.length
+        && rule.botAuthor.every((login) => typeof login === 'string' && login),
+      `Rule "${rule.name}": botAuthor must be a non-empty array of logins`);
     }
     if ('minChangedLines' in rule) {
       check(Number.isSafeInteger(rule.minChangedLines) && rule.minChangedLines > 0, `Rule "${rule.name}": invalid minChangedLines`);
@@ -87,6 +92,14 @@ function ruleEvidence(rule, pr) {
     const field = rule.declaration.field.toLowerCase();
     const value = pr.declarations[field];
     return rule.declaration.values.map((v) => v.toLowerCase()).includes(value) ? [`${rule.declaration.field}: ${value}`] : [];
+  }
+  if (rule.botAuthor) {
+    const login = pr.author?.login;
+    return pr.author?.type?.toLowerCase() === 'bot'
+      && typeof login === 'string'
+      && rule.botAuthor.some((recognized) => recognized.toLowerCase() === login.toLowerCase())
+      ? [`GitHub bot PR author: ${login}`]
+      : [];
   }
   return pr.changedLines >= rule.minChangedLines ? [`${pr.changedLines} changed lines`] : [];
 }
@@ -135,6 +148,7 @@ export async function runAdapter({ eventPath, sourceDir, outputDir, policyPath, 
   const result = assess(policy, {
     labels: (pr.labels ?? []).map((label) => label.name),
     body: pr.body,
+    author: pr.user,
     paths: files.map(([, , path]) => path),
     changedLines,
   });

@@ -20,27 +20,22 @@
 - [ ] `npm run build` and `npm run lint` pass locally.
 - [ ] Relevant docs updated (`README.md`, `.env.example`, `DEMO.md`) if behavior/config changed.
 
+## FAA risk scoring
+
+FAA risk scoring may invoke a PR differential scan. The score considers labels, changed paths,
+change size, and recognized Copilot-authored PRs. For the declarations below, only
+significant/predominant AI assistance, unreviewed AI-generated code, and security-sensitive
+changes add points; missing or unrecognized answers do not. Bot authorship does not detect AI
+assistance in human-authored PRs.
+
 ## AI assistance
 
-<!-- Replace each comment with one listed value. Declarations add context; they cannot lower automated risk. -->
+<!-- Replace each answer comment with one listed value; keep the field labels unchanged. -->
 
-**Before submitting:** Replace every answer placeholder in this section and Security impact
-with exactly one listed value. Keep the field labels unchanged. Do not leave an HTML comment
-as an answer. Complete all declarations for human review; the template does not enforce
-completion.
-
-For assistance level, use `none` for no AI assistance, `low` for minor suggestions,
-`significant` for substantial assistance, or `predominant` when AI produced most of the change.
-For manual review, use `yes` only when a human has reviewed all AI-generated code in this PR,
-`no` if that review is incomplete, or `not-applicable` if there is no AI-generated code.
-An AI review or a passing test/scan is not human manual review.
-
-Configured risk criteria can select a PR-only differential FAA scan and import its results
-into the branch's FoD/SSC target. Findings remain report-only, not automatically accepted.
-Currently, FAA scoring uses only these declarations: significant/predominant AI assistance,
-AI-generated code not manually reviewed, and security-sensitive code changed. Other
-declarations provide context for human review but do not affect the FAA score. Missing or
-unrecognized answers do not add points or produce an `unknown` status.
+Use `none` for no AI, `low` for minor suggestions, `significant` for substantial help, or
+`predominant` when AI produced most of the change. For manual review, use `yes` only if a human
+reviewed all AI-generated code, `no` if that review is incomplete, or `not-applicable` if none
+was generated. AI review, tests, and scans do not count as human review.
 
 - AI assistance used: <!-- none | low | significant | predominant -->
 - AI tool: <!-- GitHub Copilot | other | none -->
@@ -48,11 +43,11 @@ unrecognized answers do not add points or produce an `unknown` status.
 
 ## Security impact
 
-Answer for the entire PR, including CI workflows, scripts, credentials and trust boundaries,
-not only application code. If unsure, investigate or ask the author/reviewer rather than
-defaulting to `no`. FAA path rules score independently: a negative declaration does not
-cancel points from matching changed paths. The current adapter does not check for conflicts
-between declarations and path evidence.
+<!-- Replace each answer comment with one listed value; keep the field labels unchanged. -->
+
+Answer for the whole PR, including CI, scripts, credentials, and trust boundaries. If unsure,
+investigate or ask; don't default to `no`. FAA path evidence scores independently and is not
+overridden by declarations.
 
 - Security-sensitive code generated or modified: <!-- yes | no -->
 - Authentication or authorization changed: <!-- yes | no -->

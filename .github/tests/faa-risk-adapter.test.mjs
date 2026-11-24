@@ -30,6 +30,15 @@ test('label, path, declaration and size rules each add points', () => {
   assert.equal(assess(policy, pr({ changedLines: 500 })).score, 2);
 });
 
+test('only a configured GitHub bot author adds AI-agent points', () => {
+  const copilot = assess(policy, pr({ author: { login: 'copilot', type: 'Bot' } }));
+  assert.equal(copilot.score, 2);
+  assert.equal(copilot.selected, false);
+  assert.equal(copilot.matched[0].name, 'Recognized AI agent authored pull request');
+  assert.equal(assess(policy, pr({ author: { login: 'Copilot', type: 'User' } })).score, 0);
+  assert.equal(assess(policy, pr({ author: { login: 'dependabot[bot]', type: 'Bot' } })).score, 0);
+});
+
 test('rules need exactly one condition', () => {
   assert.throws(() => validatePolicy({ threshold: 1, rules: [{ name: 'x', points: 1 }] }), /exactly one/);
   assert.throws(() => validatePolicy({ threshold: 1, rules: [{ name: 'x', points: 1, label: 'a', paths: ['b'] }] }), /exactly one/);
@@ -52,12 +61,14 @@ test('runAdapter computes the merge-base range and skips forks', async () => {
       const eventPath = join(dir, `event-${headRepoId}.json`);
       await writeFile(eventPath, JSON.stringify({ pull_request: {
         number: 7, body: '', labels: [], base: { sha: base, repo: { id: 1 } }, head: { sha: head, repo: { id: headRepoId } },
+        user: { login: 'Copilot', type: 'Bot' },
       } }));
       return runAdapter({ eventPath, sourceDir: dir, outputDir: join(dir, 'out'), policyPath: new URL('../faa-policy.json', import.meta.url), env: {} });
     };
     const same = await run(1);
     assert.equal(same.doFaa, true);
     assert.equal(same.changeRange, `${base}..${head}`);
+    assert.ok(same.matched.some((rule) => rule.name === 'Recognized AI agent authored pull request'));
     const fork = await run(2);
     assert.equal(fork.doFaa, false);
     assert.equal(fork.skipReason, 'fork');

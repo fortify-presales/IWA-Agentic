@@ -61,7 +61,7 @@ When you change a spec's status, update its `**Status**` line and this index in 
 | [008](008-wishlist-favorites/spec.md) | Wishlist and Favorites | Draft | Yes | |
 | [009](009-discount-codes/spec.md) | Discount Codes and Promotions | Draft | Yes | |
 | [010](010-returns-refunds/spec.md) | Returns and Refunds | Draft | Yes | |
-| [011](011-inventory-management/spec.md) | Inventory Management | Implementing | No | Prerequisite for 019. |
+| [011](011-inventory-management/spec.md) | Inventory Management | Implemented | Yes | Prerequisite for 019. |
 | [012](012-notification-templates/spec.md) | Notification Templates | Draft | Yes | |
 | [013](013-agentic-excessive-agency/spec.md) | Agentic Excessive Agency Demonstration | Implemented | Yes | |
 | [014](014-business-data-prompt-injection/spec.md) | Indirect Prompt Injection Through Business Data | Implemented | Yes | |
@@ -69,6 +69,6 @@ When you change a spec's status, update its `**Status**` line and this index in 
 | [017](017-agent-tool-expansion/spec.md) | Consolidated Agent Tool Expansion | Implemented | Yes | |
 | [018](018-mfa-completion/spec.md) | MFA Completion (Email, SMS, TOTP) | Implemented | Yes | |
 | [019](019-headless-inventory-agent/spec.md) | Headless Inventory Reordering Agent | Draft | Yes | Requires 011. |
-| [099](099-fortify-demo-workflows/spec.md) | Fortify Demo Workflows | Implemented | Yes | |
+| [099](099-fortify-demo-workflows/spec.md) | Fortify Demo Workflows | Ongoing | Yes | |
 
 Number `015` is unused and reserved as a gap; new specs continue at `020`.

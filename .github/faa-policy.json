@@ -7,6 +7,7 @@
     "  label: matches when the PR has this label, e.g. \"faa-required\".",
     "  paths: list of case-insensitive regular expressions matched against changed, repository-relative paths (forward slashes).",
     "  declaration: {\"field\": \"<PR body label>\", \"values\": [...]} matches a PR body line '- <field>: <value>' (see .github/PULL_REQUEST_TEMPLATE.md).",
+    "  botAuthor: list of GitHub logins matched case-insensitively when the PR author has GitHub type \"Bot\".",
     "  minChangedLines: matches when added + deleted lines across the PR are >= this number.",
     "To extend: add, remove or re-weight rules, or change threshold. No code change is needed.",
     "Keys starting with '_' are ignored. Test locally: node .github/scripts/faa-risk-adapter.mjs --help"
@@ -49,6 +50,11 @@
     {
       "name": "Significant or predominant AI assistance declared",
       "declaration": { "field": "AI assistance used", "values": ["significant", "predominant"] },
+      "points": 2
+    },
+    {
+      "name": "Recognized AI agent authored pull request",
+      "botAuthor": ["Copilot"],
       "points": 2
     },
     {
